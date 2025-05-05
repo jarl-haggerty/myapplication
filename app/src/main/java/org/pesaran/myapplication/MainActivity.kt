@@ -1,9 +1,18 @@
 package org.pesaran.myapplication
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -26,6 +36,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -42,9 +54,111 @@ import kotlin.time.Duration.Companion.seconds
 
 class MainActivity : ComponentActivity() {
     val node = WaveNode()
+    private var bluetoothAllowed = mutableStateOf(false)
+    private var bluetoothEnabled = mutableStateOf(false)
+    private var bluetoothAdapterExists = mutableStateOf(false)
+    private var error = mutableStateOf<String?>(null)
 
+    private val scanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            super.onScanResult(callbackType, result)
+            println("${result.device.name} ${result.device.address}" )
+        }
+    }
+
+
+    @SuppressLint("MissingPermission")
+    private fun scan() {
+        val bluetoothManager = getSystemService(BluetoothManager::class.java)
+        val bluetoothAdapter = bluetoothManager.adapter!!
+        bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun findSleeve() {
+        scan()
+        /*val bluetoothManager = getSystemService(BluetoothManager::class.java)
+        val bluetoothAdapter = bluetoothManager.adapter!!
+        val pairs = bluetoothAdapter.bondedDevices!!
+        pairs.find {
+            it.name == "intan"
+        }*/
+    }
+
+    val bluetoothEnableLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if(it.resultCode == RESULT_OK) {
+            bluetoothEnabled.value = true
+            findSleeve()
+        } else {
+            error.value = "Bluetooth disabled"
+        }
+    }
+
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if(it.getOrDefault(android.Manifest.permission.BLUETOOTH_SCAN, false)
+            && it.getOrDefault(android.Manifest.permission.BLUETOOTH_CONNECT, false)
+            && it.getOrDefault(android.Manifest.permission.ACCESS_FINE_LOCATION, false)
+            && it.getOrDefault(android.Manifest.permission.ACCESS_COARSE_LOCATION, false)) {
+            bluetoothAllowed.value = true
+            enableBluetooth()
+        } else {
+            error.value = "Bluetooth permissions denied"
+        }
+    }
+
+    private fun enableBluetooth() {
+        val bluetoothManager = getSystemService(BluetoothManager::class.java)
+        val bluetoothAdapter = bluetoothManager.adapter ?: return
+
+        bluetoothAdapterExists.value = true
+
+        if(bluetoothAdapter.isEnabled) {
+            bluetoothEnabled.value = true
+            findSleeve()
+            return
+        }
+
+        val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+        bluetoothEnableLauncher.launch(enableIntent)
+    }
+
+    fun requestPermissions() {
+        val permissions = listOf(
+            android.Manifest.permission.BLUETOOTH_CONNECT,
+            android.Manifest.permission.BLUETOOTH_SCAN,
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        val unpermitted = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_DENIED
+        }
+        if(android.Manifest.permission.BLUETOOTH_CONNECT !in unpermitted
+            && android.Manifest.permission.BLUETOOTH_SCAN !in unpermitted
+            && android.Manifest.permission.ACCESS_FINE_LOCATION !in unpermitted
+            && android.Manifest.permission.ACCESS_COARSE_LOCATION !in unpermitted) {
+            bluetoothAllowed.value = true
+            enableBluetooth()
+            return
+        }
+        if(unpermitted.isEmpty()) {
+            return
+        }
+
+        permissionLauncher.launch(unpermitted.toTypedArray())
+    }
+
+    @SuppressLint("ApplySharedPref")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val bluetoothManager = getSystemService(BluetoothManager::class.java)
+        val bluetoothAdapter = bluetoothManager.adapter
+        if(bluetoothAdapter != null) {
+            bluetoothAdapterExists.value = true
+            requestPermissions()
+        } else {
+            error.value = "No Bluetooth adapter found"
+        }
 
         val preferences = PreferenceManager.getDefaultSharedPreferences(this)
         val id = preferences.getString("id", "")
@@ -71,7 +185,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val storage = Storage(this)
-        storage.add(node)
+        storage.add("Wave", node)
 
         val toggle = {
             node.toggle()
@@ -85,15 +199,23 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             var count by remember { value }
+            //var bluetoothAllowed by remember { bluetoothAllowed }
+            var bluetoothEnabled by remember { bluetoothEnabled }
+            //var bluetoothAdapterExists by remember { bluetoothAdapterExists }
+            var error by remember { error }
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.fillMaxSize()) {
-                        Greeting(
-                            name = "Android",
-                            modifier = Modifier.padding(innerPadding)
-                        );
-                        Button(onClick = {toggle()}) { Text(count.toString())};
-                        Graph(modifier=Modifier.fillMaxSize(), node)
+                        if(error != null) {
+                            Text(error!!, modifier = Modifier.padding(innerPadding));
+                        } else if (bluetoothEnabled) {
+                            Greeting(
+                                name = "Android",
+                                modifier = Modifier.padding(innerPadding)
+                            );
+                            Button(onClick = {toggle()}) { Text(count.toString())};
+                            Graph(modifier=Modifier.fillMaxSize(), node)
+                        }
                     }
                 }
             }
@@ -142,7 +264,7 @@ fun Graph(modifier: Modifier = Modifier, node: GraphNode) {
             }
             lastX = x
             lastY = y
-            println("$lastX $lastY")
+            //println("$lastX $lastY")
             time += interval
         }
 

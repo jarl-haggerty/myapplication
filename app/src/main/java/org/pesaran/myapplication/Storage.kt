@@ -21,13 +21,15 @@ import kotlin.time.TimeSource
 class Storage(val context: Context) {
     var running = false
 
-    private fun onTimeSeries(node: TimeSeriesNode) {
+    private fun onTimeSeries(name: String, node: TimeSeriesNode) {
         if(!node.hasAnalogData() || !running) {
             return
         }
 
         var count = 0
         val builder = ThalamusOuterClass.StorageRecord.newBuilder()
+            .setTime(node.time().inWholeNanoseconds)
+            .setNode(name)
         val timeSeriesBuilder = builder.analogBuilder
         timeSeriesBuilder.setTime(node.time().inWholeNanoseconds)
 
@@ -48,15 +50,15 @@ class Storage(val context: Context) {
 
         //timeSeriesBuilder.build()
         val record = builder.build()
-        println(record.toString())
+        //println(record.toString())
         writeRecord(record)
     }
 
     val connections = mutableListOf<Signal1<Node>.Connection>()
-    fun add(node: Node) {
+    fun add(name: String, node: Node) {
         if(node is TimeSeriesNode) {
             connections.add(node.ready.connect {
-                onTimeSeries(node)
+                onTimeSeries(name, node)
             })
         }
     }

@@ -12,8 +12,10 @@ class Signal1<T> {
         }
     }
     private var connections = mutableListOf<Connection>();
-    fun connect(listener: (T) -> Unit) {
-        connections.add(Connection(this, listener))
+    fun connect(listener: (T) -> Unit): Connection {
+        val connection = Connection(this, listener)
+        connections.add(connection)
+        return connection
     }
 
     operator fun invoke(t: T) {
@@ -32,8 +34,10 @@ class Signal2<T1, T2> {
     }
 
     private var connections = mutableListOf<Connection>();
-    fun connect(listener: (T1, T2) -> Unit) {
-        connections.add(Connection(this, listener))
+    fun connect(listener: (T1, T2) -> Unit): Connection {
+        val connection = Connection(this, listener)
+        connections.add(connection)
+        return connection
     }
 
     operator fun invoke(t1: T1, t2: T2) {
