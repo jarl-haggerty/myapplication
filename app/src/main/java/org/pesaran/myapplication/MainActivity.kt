@@ -1,14 +1,21 @@
 package org.pesaran.myapplication
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -36,7 +43,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
 import androidx.work.Constraints
@@ -52,26 +58,127 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Duration.Companion.seconds
 
+val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
+val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
+val UART_TX_CHAR_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+val ID_ENABLE: Byte = 0
+val ID_SET_SAMPLE_RATE: Byte = 1
+val ID_SET_CHANNEL_MASK: Byte = 2
+
+enum class Sensor(i: Int) {
+    ICM20948(2),
+    INTAN_RHD2216(4),
+    ADC_SINGLE(5)
+}
+
 class MainActivity : ComponentActivity() {
     val node = WaveNode()
     private var bluetoothAllowed = mutableStateOf(false)
     private var bluetoothEnabled = mutableStateOf(false)
     private var bluetoothAdapterExists = mutableStateOf(false)
+    private var intanFound = mutableStateOf(false)
     private var error = mutableStateOf<String?>(null)
+    private var status = mutableStateOf<String?>(null)
+    private var scanning = false
+    private var device: BluetoothDevice? = null
+    private var gatt: BluetoothGatt? = null
+    private var uartService: BluetoothGattService? = null
+    private var rxCharacteristic: BluetoothGattCharacteristic? = null
+    private var txCharacteristic: BluetoothGattCharacteristic? = null
+
+    @SuppressLint("MissingPermission")
+    override fun onDestroy() {
+        super.onDestroy()
+        gatt?.close()
+    }
+
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                // successfully connected to the GATT Server
+                this@MainActivity.status.value = "Discovering services"
+                gatt!!.requestMtu(247)
+                gatt!!.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                error.value = "NORA_INTAN_RHD_ICM disconnected"
+            }
+        }
+        @SuppressLint("MissingPermission")
+        override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
+            println("onServicesDiscovered received: $status")
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                println("BluetoothGatt.GATT_SUCCESS")
+                uartService = gatt!!.services.find {
+                    it.uuid.equals(UART_SERVICE_UUID)
+                }
+                println("uartService $uartService")
+                rxCharacteristic = uartService!!.characteristics.find {
+                    it.uuid.equals(UART_RX_CHAR_UUID)
+                }
+                println("rxCharacteristic $rxCharacteristic")
+                txCharacteristic = uartService!!.characteristics.find {
+                    it.uuid.equals(UART_TX_CHAR_UUID)
+                }
+                println("txCharacteristic $txCharacteristic")
+
+                gatt.setCharacteristicNotification(txCharacteristic, true)
+
+                val sampleRateBlock = Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, byteArrayOf(0, 20000))
+            } else {
+                //println("onServicesDiscovered received: $status")
+            }
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            super.onCharacteristicChanged(gatt, characteristic, value)
+            println("onCharacteristicChanged $value")
+            if(characteristic != txCharacteristic) {
+                return
+            }
+            println(value)
+        }
+    }
 
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             super.onScanResult(callbackType, result)
-            println("${result.device.name} ${result.device.address}" )
+            println("${result.device.name} ${result.device.uuids} ${callbackType}")
+            if(result.device.name == "NORA_INTAN_RHD_ICM") {
+                device = result.device
+                intanFound.value = true
+                if(scanning) {
+                    scanning = false
+                    val bluetoothManager = getSystemService(BluetoothManager::class.java)
+                    val bluetoothAdapter = bluetoothManager.adapter!!
+                    bluetoothAdapter.bluetoothLeScanner.stopScan(this)
+                }
+
+                status.value = "Connecting to NORA_INTAN_RHD_ICM"
+                gatt = result.device.connectGatt(this@MainActivity, false, gattCallback)
+            }
         }
     }
-
 
     @SuppressLint("MissingPermission")
     private fun scan() {
         val bluetoothManager = getSystemService(BluetoothManager::class.java)
         val bluetoothAdapter = bluetoothManager.adapter!!
+        scanning = true
+        status.value = "Scanning for NORA_INTAN_RHD_ICM"
+        Handler(Looper.getMainLooper()).postDelayed({
+            if(scanning) {
+                if(device == null) {
+                    error.value = "NORA_INTAN_RHD_ICM not found"
+                }
+                scanning = false
+                bluetoothAdapter.bluetoothLeScanner.stopScan(scanCallback)
+            }
+        }, 120000)
         bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
     }
 
@@ -201,14 +308,18 @@ class MainActivity : ComponentActivity() {
             var count by remember { value }
             //var bluetoothAllowed by remember { bluetoothAllowed }
             var bluetoothEnabled by remember { bluetoothEnabled }
+            var intanFound by remember { intanFound }
             //var bluetoothAdapterExists by remember { bluetoothAdapterExists }
             var error by remember { error }
+            var status by remember { status }
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.fillMaxSize()) {
                         if(error != null) {
-                            Text(error!!, modifier = Modifier.padding(innerPadding));
-                        } else if (bluetoothEnabled) {
+                            Text(error!!, modifier = Modifier.padding(innerPadding), color=Color.Red)
+                        } else if (status != null) {
+                            Text(status!!, modifier = Modifier.padding(innerPadding));
+                        } else {
                             Greeting(
                                 name = "Android",
                                 modifier = Modifier.padding(innerPadding)
