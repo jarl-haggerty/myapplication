@@ -1,11 +1,13 @@
 package org.pesaran.myapplication
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
@@ -43,6 +45,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
 import androidx.work.Constraints
@@ -50,8 +53,13 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import org.pesaran.myapplication.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
@@ -123,7 +131,7 @@ class MainActivity : ComponentActivity() {
 
                 gatt.setCharacteristicNotification(txCharacteristic, true)
 
-                val sampleRateBlock = Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, byteArrayOf(0, 20000))
+                //val sampleRateBlock = Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, byteArrayOf(0, 20000))
             } else {
                 //println("onServicesDiscovered received: $status")
             }
@@ -193,24 +201,30 @@ class MainActivity : ComponentActivity() {
         }*/
     }
 
+    val bluetoothEnableChannel = Channel<Status>()
     val bluetoothEnableLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if(it.resultCode == RESULT_OK) {
-            bluetoothEnabled.value = true
-            findSleeve()
-        } else {
-            error.value = "Bluetooth disabled"
+        scope.launch {
+            if (it.resultCode == RESULT_OK) {
+                bluetoothEnableChannel.send(Status(true, ""))
+            } else {
+                bluetoothEnableChannel.send(Status(false, "Bluetooth disabled"))
+            }
         }
     }
 
+    val scope = CoroutineScope(Dispatchers.Main)
+
+    val permissionChannel = Channel<Status>()
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        if(it.getOrDefault(android.Manifest.permission.BLUETOOTH_SCAN, false)
-            && it.getOrDefault(android.Manifest.permission.BLUETOOTH_CONNECT, false)
-            && it.getOrDefault(android.Manifest.permission.ACCESS_FINE_LOCATION, false)
-            && it.getOrDefault(android.Manifest.permission.ACCESS_COARSE_LOCATION, false)) {
-            bluetoothAllowed.value = true
-            enableBluetooth()
-        } else {
-            error.value = "Bluetooth permissions denied"
+        scope.launch {
+            if(it.getOrDefault(android.Manifest.permission.BLUETOOTH_SCAN, false)
+                && it.getOrDefault(android.Manifest.permission.BLUETOOTH_CONNECT, false)
+                && it.getOrDefault(android.Manifest.permission.ACCESS_FINE_LOCATION, false)
+                && it.getOrDefault(android.Manifest.permission.ACCESS_COARSE_LOCATION, false)) {
+                permissionChannel.send(Status(true, ""))
+            } else {
+                permissionChannel.send(Status(false, "Bluetooth permissions denied"))
+            }
         }
     }
 
@@ -254,11 +268,230 @@ class MainActivity : ComponentActivity() {
         permissionLauncher.launch(unpermitted.toTypedArray())
     }
 
+    data class Status(val success: Boolean, val message: String)
+
+    private suspend fun checkPermissions(): Status {
+        val permissions = listOf(
+            android.Manifest.permission.BLUETOOTH_CONNECT,
+            android.Manifest.permission.BLUETOOTH_SCAN,
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        val unpermitted = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_DENIED
+        }
+
+        if(unpermitted.isEmpty()) {
+            return Status(true, "")
+        }
+
+        permissionLauncher.launch(unpermitted.toTypedArray())
+
+        val status = permissionChannel.receive()
+        return status
+    }
+
+    suspend fun checkBluetooth(): Status {
+        val bluetoothManager = getSystemService(BluetoothManager::class.java)
+        val bluetoothAdapter = bluetoothManager.adapter ?: return Status(false, "No Bluetooth adapter")
+
+        if(bluetoothAdapter.isEnabled) {
+            return Status(true, "")
+        }
+        val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+        bluetoothEnableLauncher.launch(enableIntent)
+        return bluetoothEnableChannel.receive()
+    }
+
+    var ready = false
+    suspend fun loop() {
+        while(true) {
+            val permissionsStatus = checkPermissions()
+            if (!permissionsStatus.success) {
+                error.value = permissionsStatus.message
+                return
+            }
+            if (ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.BLUETOOTH_SCAN
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+
+            val bluetoothStatus = checkBluetooth()
+            if (!bluetoothStatus.success) {
+                error.value = bluetoothStatus.message
+                return
+            }
+            bluetoothEnabled.value = true
+
+            val scanChannel = Channel<BluetoothDevice>()
+            val bluetoothManager = getSystemService(BluetoothManager::class.java)
+            val bluetoothAdapter = bluetoothManager.adapter!!
+            val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+            val deviceAddress = preferences.getString("device-address", "")
+            val scanCallback = object : ScanCallback() {
+                @SuppressLint("MissingPermission")
+                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                    super.onScanResult(callbackType, result)
+                    println("${result.device.name} ${result.device.address} ${callbackType}")
+                    if((result.device.name == "NORA_INTAN_RHD_ICM") || (result.device.address == deviceAddress)) {
+                        preferences.edit().putString("device-address", result.device.address).apply()
+                        bluetoothAdapter.bluetoothLeScanner.stopScan(this)
+                        scope.launch {
+                            scanChannel.send(result.device)
+                        }
+                    }
+                }
+            }
+
+            bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
+
+            val device = scanChannel.receive()
+
+            val connectionChannel = Channel<Int>()
+            val serviceChannel = Channel<Status>()
+            val gattCallback = object : BluetoothGattCallback() {
+                override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+                    scope.launch {
+                        connectionChannel.send(newState)
+                    }
+                }
+                @SuppressLint("MissingPermission")
+                override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
+                    println("onServicesDiscovered received: $status")
+                    scope.launch {
+                        if(status == BluetoothGatt.GATT_SUCCESS) {
+                            serviceChannel.send(Status(true, ""))
+                        } else {
+                            serviceChannel.send(Status(true, "Service Discovery Failed"))
+                        }
+                    }
+                }
+
+                override fun onCharacteristicChanged(
+                    gatt: BluetoothGatt,
+                    characteristic: BluetoothGattCharacteristic,
+                    value: ByteArray
+                ) {
+                    super.onCharacteristicChanged(gatt, characteristic, value)
+                    println("onCharacteristicChanged $characteristic $value")
+                }
+
+                override fun onCharacteristicRead(
+                    gatt: BluetoothGatt,
+                    characteristic: BluetoothGattCharacteristic,
+                    value: ByteArray,
+                    status: Int
+                ) {
+                    super.onCharacteristicRead(gatt, characteristic, value, status)
+                }
+
+                override fun onCharacteristicWrite(
+                    gatt: BluetoothGatt?,
+                    characteristic: BluetoothGattCharacteristic?,
+                    status: Int
+                ) {
+                    super.onCharacteristicWrite(gatt, characteristic, status)
+                    println("Wrote $status")
+                }
+            }
+            val gatt = device.connectGatt(this@MainActivity, false, gattCallback)
+
+            var connectionState = BluetoothProfile.STATE_DISCONNECTED
+            while(connectionState != BluetoothProfile.STATE_CONNECTED) {
+                connectionState = connectionChannel.receive()
+            }
+
+            gatt.requestMtu(247)
+            gatt.discoverServices()
+            var servicesStatus = serviceChannel.receive()
+            if(!servicesStatus.success) {
+                error.value = servicesStatus.message
+                return
+            }
+
+            val uartService = gatt.getService(UART_SERVICE_UUID)
+            println("uartService $uartService")
+            val rxCharacteristic = uartService!!.getCharacteristic(UART_RX_CHAR_UUID)
+            println("rxCharacteristic $rxCharacteristic")
+            val txCharacteristic = uartService!!.getCharacteristic(UART_TX_CHAR_UUID)
+            println("txCharacteristic $txCharacteristic")
+
+            //gatt.setCharacteristicNotification(txCharacteristic, false)
+            gatt.setCharacteristicNotification(txCharacteristic, true)
+            //gatt.writeCharacteristic(txCharacteristic!!, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+
+            println(1)
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, byteArrayOf(2, 0, 0, 0, 63)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(2)
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, byteArrayOf(4, 0, 0, -1, -1)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(3)
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, byteArrayOf(5, 0, 0, 0, 1)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(4)
+
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, byteArrayOf(2, 0)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(5)
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, byteArrayOf(4, 19)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(6)
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, byteArrayOf(5, 0)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(7)
+
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, byteArrayOf(2, 1)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(1)
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, byteArrayOf(4, 1)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(1)
+            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, byteArrayOf(5, 1)).apply {
+                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            }
+            println(66666)
+            //gatt.readCharacteristic(txCharacteristic)
+
+            status.value = "Ready"
+            ready = true
+            while(connectionState == BluetoothProfile.STATE_CONNECTED) {
+                status.value = "Ready $connectionState"
+                println(connectionState)
+                connectionState = connectionChannel.receive()
+            }
+            ready = false
+        }
+    }
+
     @SuppressLint("ApplySharedPref")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val bluetoothManager = getSystemService(BluetoothManager::class.java)
+        scope.launch {
+            loop()
+        }
+
+        scope.launch {
+            var i = 0
+            while(true) {
+                delay(1000)
+                status.value = if(ready) {"ready $i"} else {"waiting $i"}
+                ++i
+            }
+        }
+
+        /*val bluetoothManager = getSystemService(BluetoothManager::class.java)
         val bluetoothAdapter = bluetoothManager.adapter
         if(bluetoothAdapter != null) {
             bluetoothAdapterExists.value = true
@@ -282,7 +515,6 @@ class MainActivity : ComponentActivity() {
         val workManager = WorkManager.getInstance(this)
         workManager.enqueueUniquePeriodicWork("SleeveUpload", ExistingPeriodicWorkPolicy.KEEP, work)
 
-        var value = mutableIntStateOf(0)
 
         val filesDir = getExternalFilesDir(null)
 
@@ -291,6 +523,8 @@ class MainActivity : ComponentActivity() {
             value.intValue = number
         }
 
+*/
+        var value = mutableIntStateOf(0)
         val storage = Storage(this)
         storage.add("Wave", node)
 
