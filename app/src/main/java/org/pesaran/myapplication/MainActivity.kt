@@ -60,11 +60,13 @@ import org.pesaran.myapplication.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.time.Duration.Companion.seconds
+import java.util.LinkedList
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -349,8 +351,13 @@ class MainActivity : ComponentActivity() {
 
             val device = scanChannel.receive()
 
+            data class TimeSize(val time: Long, val count: Long)
+            var lastTime = System.currentTimeMillis()
+            val payloads = LinkedList<TimeSize>()
             val connectionChannel = Channel<Int>()
             val serviceChannel = Channel<Status>()
+            val wroteChannel = Channel<Status>()
+            val wroteDescriptorChannel = Channel<Status>()
             val gattCallback = object : BluetoothGattCallback() {
                 override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
                     scope.launch {
@@ -375,7 +382,23 @@ class MainActivity : ComponentActivity() {
                     value: ByteArray
                 ) {
                     super.onCharacteristicChanged(gatt, characteristic, value)
-                    println("onCharacteristicChanged $characteristic $value")
+                    val now = System.currentTimeMillis()
+                    payloads.add(TimeSize(now, value.size.toLong()))
+                    while(payloads.last().time - payloads.first().time >= 1000) {
+                        payloads.removeFirst()
+                    }
+                    if(now - lastTime >= 1000) {
+                        val total = payloads.fold(0L) {
+                            a, b -> a + b.count
+                        }
+                        val duration = (payloads.last().time - payloads.first().time).toDouble()/1000
+                        println(total / duration)
+                        lastTime = now
+                    }
+
+                    Block.decodeBlockPacket(ByteBuffer.wrap(value)).forEach {
+                        //sensorDecoders.decodePacket
+                    }
                 }
 
                 override fun onCharacteristicRead(
@@ -393,10 +416,31 @@ class MainActivity : ComponentActivity() {
                     status: Int
                 ) {
                     super.onCharacteristicWrite(gatt, characteristic, status)
+                    scope.launch {
+                        if(status == BluetoothGatt.GATT_SUCCESS) {
+                            wroteChannel.send(Status(true, ""))
+                        } else {
+                            wroteChannel.send(Status(true, ""))
+                        }
+                    }
                     println("Wrote $status")
                 }
+
+                override fun onDescriptorWrite (gatt: BluetoothGatt,
+                                                descriptor: BluetoothGattDescriptor,
+                                                status: Int) {
+                    super.onDescriptorWrite(gatt, descriptor, status)
+                    scope.launch {
+                        if(status == BluetoothGatt.GATT_SUCCESS) {
+                            wroteDescriptorChannel.send(Status(true, ""))
+                        } else {
+                            wroteDescriptorChannel.send(Status(true, ""))
+                        }
+                    }
+                    println("Wrote Descriptor $status")
+                }
             }
-            val gatt = device.connectGatt(this@MainActivity, false, gattCallback)
+            val gatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
 
             var connectionState = BluetoothProfile.STATE_DISCONNECTED
             while(connectionState != BluetoothProfile.STATE_CONNECTED) {
@@ -418,50 +462,48 @@ class MainActivity : ComponentActivity() {
             val txCharacteristic = uartService!!.getCharacteristic(UART_TX_CHAR_UUID)
             println("txCharacteristic $txCharacteristic")
 
+            val write: (suspend (Block) -> Status) = {
+                val data = it.encode()
+                println(gatt)
+                println(rxCharacteristic)
+                println(data)
+                gatt!!.writeCharacteristic(rxCharacteristic!!, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                wroteChannel.receive()
+            }
+
             //gatt.setCharacteristicNotification(txCharacteristic, false)
             gatt.setCharacteristicNotification(txCharacteristic, true)
+            txCharacteristic.descriptors.forEach {
+                gatt.writeDescriptor(it,  BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                wroteDescriptorChannel.receive()
+            }
             //gatt.writeCharacteristic(txCharacteristic!!, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-
+            //delay(1000)
             println(1)
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, byteArrayOf(2, 0, 0, 0, 63)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(2, 0, 0, 0, 63))))
+            //delay(1000)
             println(2)
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, byteArrayOf(4, 0, 0, -1, -1)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(4, 0, 0, -1, -1))))
+            //delay(1000)
             println(3)
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, byteArrayOf(5, 0, 0, 0, 1)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(5, 0, 0, 0, 1))))
+            //delay(1000)
             println(4)
 
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, byteArrayOf(2, 0)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(2, 0))))
             println(5)
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, byteArrayOf(4, 19)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(4, 19))))
             println(6)
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, byteArrayOf(5, 0)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(5, 0))))
             println(7)
 
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, byteArrayOf(2, 1)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, ByteBuffer.wrap(byteArrayOf(2, 1))))
             println(1)
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, byteArrayOf(4, 1)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, ByteBuffer.wrap(byteArrayOf(4, 1))))
             println(1)
-            Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, byteArrayOf(5, 1)).apply {
-                gatt.writeCharacteristic(rxCharacteristic!!, encode(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, ByteBuffer.wrap(byteArrayOf(5, 1))))
             println(66666)
-            //gatt.readCharacteristic(txCharacteristic)
+            gatt.readCharacteristic(txCharacteristic)
 
             status.value = "Ready"
             ready = true
