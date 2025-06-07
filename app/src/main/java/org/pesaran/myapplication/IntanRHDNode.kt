@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.DoubleBuffer
 import java.nio.ShortBuffer
+import kotlin.experimental.and
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
@@ -17,7 +18,7 @@ class IntanRHDNode : IIntanRHDNode {
     private var lastTime = 0.seconds
     private var currentTime = 0.seconds
     private var timestamp = 0.seconds
-    private val _numChannels = 5
+    private val _numChannels = 16
     private var numSamples = 0
 
     fun process(block: Block) {
@@ -46,11 +47,13 @@ class IntanRHDNode : IIntanRHDNode {
                 (data.get().toInt() shl 8).toShort()
             }
             if(value > 0) {
-                outputData.putDouble((currentChannel*numSamples+currentSample)*8, (value * .195/1000).toDouble())
+                val offset = value - 0x8000
+                val result = offset * .195/1000
+                outputData.putDouble((currentChannel*numSamples+currentSample)*8, result)
             } else {
-                outputData.putDouble((currentChannel*numSamples+currentSample)*8,
-                    ((128 + value) * .195/1000).toDouble()
-                )
+                val offset = value and 0x7FFF
+                val result = offset * .195/1000
+                outputData.putDouble((currentChannel*numSamples+currentSample)*8, result)
             }
             currentChannel = (currentChannel + 1) % _numChannels
             if(currentChannel == 0) {
@@ -65,18 +68,28 @@ class IntanRHDNode : IIntanRHDNode {
 
     override fun numChannels() = _numChannels
 
-    override fun sampleInterval(channel: Int) =  10.milliseconds
+    override fun sampleInterval(channel: Int) =  1.milliseconds
 
     override fun time() = timestamp
 
     override fun name(channel: Int): String {
         return when(channel) {
-            0 -> "acc_x"
-            1 -> "acc_y"
-            2 -> "acc_z"
-            3 -> "gyro_x"
-            4 -> "gyro_y"
-            5 -> "gyro_z"
+            0 -> "ch0"
+            1 -> "ch1"
+            2 -> "ch2"
+            3 -> "ch3"
+            4 -> "ch4"
+            5 -> "ch5"
+            6 -> "ch6"
+            7 -> "ch7"
+            8 -> "ch8"
+            9 -> "ch9"
+            10 -> "ch10"
+            11 -> "ch11"
+            12 -> "ch12"
+            13 -> "ch13"
+            14 -> "ch14"
+            15 -> "ch15"
             else -> ""
         }
     }

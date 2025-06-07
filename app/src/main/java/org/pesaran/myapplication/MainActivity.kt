@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
     val adcNode = ADCNode()
     val icmNode = ICM20948Node()
     private var error = mutableStateOf<String?>(null)
-    private var status = mutableStateOf<String?>(null)
+    private var status = mutableStateOf<String>("")
 
     val bluetoothEnableChannel = Channel<Status>()
     val bluetoothEnableLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -245,7 +245,7 @@ class MainActivity : ComponentActivity() {
                         blocks.forEach {
                             when (it.blockId.toInt()) {
                                 2 -> icmNode.process(it)
-                                //4 -> intanNode.process(it)
+                                4 -> intanNode.process(it)
                                 //5 -> adcNode.process(it)
                             }
                         }
@@ -412,7 +412,7 @@ class MainActivity : ComponentActivity() {
                         } else {*/
                             Text(status!!, modifier = Modifier.padding(innerPadding));
                             Button(onClick = {toggle()}) { Text(count.toString())};
-                            Graph(modifier=Modifier.fillMaxSize(), icmNode)
+                            Graph(modifier=Modifier.fillMaxSize(), intanNode)
                         //}
                     }
                 }
@@ -432,7 +432,7 @@ val COLORS = arrayOf(
 )
 
 @Composable
-fun Graph(modifier: Modifier = Modifier, node: ICM20948Node) {
+fun Graph(modifier: Modifier = Modifier, node: IntanRHDNode) {
     var invalidate by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while(true) {
