@@ -39,6 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -71,9 +73,6 @@ import java.util.LinkedList
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_TX_CHAR_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
-val ID_ENABLE: Byte = 0
-val ID_SET_SAMPLE_RATE: Byte = 1
-val ID_SET_CHANNEL_MASK: Byte = 2
 
 enum class Sensor(i: Int) {
     ICM20948(2),
@@ -83,125 +82,11 @@ enum class Sensor(i: Int) {
 
 class MainActivity : ComponentActivity() {
     val node = WaveNode()
-    private var bluetoothAllowed = mutableStateOf(false)
-    private var bluetoothEnabled = mutableStateOf(false)
-    private var bluetoothAdapterExists = mutableStateOf(false)
-    private var intanFound = mutableStateOf(false)
+    val intanNode = IntanRHDNode()
+    val adcNode = ADCNode()
+    val icmNode = ICM20948Node()
     private var error = mutableStateOf<String?>(null)
     private var status = mutableStateOf<String?>(null)
-    private var scanning = false
-    private var device: BluetoothDevice? = null
-    private var gatt: BluetoothGatt? = null
-    private var uartService: BluetoothGattService? = null
-    private var rxCharacteristic: BluetoothGattCharacteristic? = null
-    private var txCharacteristic: BluetoothGattCharacteristic? = null
-
-    @SuppressLint("MissingPermission")
-    override fun onDestroy() {
-        super.onDestroy()
-        gatt?.close()
-    }
-
-    private val gattCallback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                // successfully connected to the GATT Server
-                this@MainActivity.status.value = "Discovering services"
-                gatt!!.requestMtu(247)
-                gatt!!.discoverServices()
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                error.value = "NORA_INTAN_RHD_ICM disconnected"
-            }
-        }
-        @SuppressLint("MissingPermission")
-        override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
-            println("onServicesDiscovered received: $status")
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                println("BluetoothGatt.GATT_SUCCESS")
-                uartService = gatt!!.services.find {
-                    it.uuid.equals(UART_SERVICE_UUID)
-                }
-                println("uartService $uartService")
-                rxCharacteristic = uartService!!.characteristics.find {
-                    it.uuid.equals(UART_RX_CHAR_UUID)
-                }
-                println("rxCharacteristic $rxCharacteristic")
-                txCharacteristic = uartService!!.characteristics.find {
-                    it.uuid.equals(UART_TX_CHAR_UUID)
-                }
-                println("txCharacteristic $txCharacteristic")
-
-                gatt.setCharacteristicNotification(txCharacteristic, true)
-
-                //val sampleRateBlock = Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, byteArrayOf(0, 20000))
-            } else {
-                //println("onServicesDiscovered received: $status")
-            }
-        }
-
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray
-        ) {
-            super.onCharacteristicChanged(gatt, characteristic, value)
-            println("onCharacteristicChanged $value")
-            if(characteristic != txCharacteristic) {
-                return
-            }
-            println(value)
-        }
-    }
-
-    private val scanCallback = object : ScanCallback() {
-        @SuppressLint("MissingPermission")
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            super.onScanResult(callbackType, result)
-            println("${result.device.name} ${result.device.uuids} ${callbackType}")
-            if(result.device.name == "NORA_INTAN_RHD_ICM") {
-                device = result.device
-                intanFound.value = true
-                if(scanning) {
-                    scanning = false
-                    val bluetoothManager = getSystemService(BluetoothManager::class.java)
-                    val bluetoothAdapter = bluetoothManager.adapter!!
-                    bluetoothAdapter.bluetoothLeScanner.stopScan(this)
-                }
-
-                status.value = "Connecting to NORA_INTAN_RHD_ICM"
-                gatt = result.device.connectGatt(this@MainActivity, false, gattCallback)
-            }
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun scan() {
-        val bluetoothManager = getSystemService(BluetoothManager::class.java)
-        val bluetoothAdapter = bluetoothManager.adapter!!
-        scanning = true
-        status.value = "Scanning for NORA_INTAN_RHD_ICM"
-        Handler(Looper.getMainLooper()).postDelayed({
-            if(scanning) {
-                if(device == null) {
-                    error.value = "NORA_INTAN_RHD_ICM not found"
-                }
-                scanning = false
-                bluetoothAdapter.bluetoothLeScanner.stopScan(scanCallback)
-            }
-        }, 120000)
-        bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun findSleeve() {
-        scan()
-        /*val bluetoothManager = getSystemService(BluetoothManager::class.java)
-        val bluetoothAdapter = bluetoothManager.adapter!!
-        val pairs = bluetoothAdapter.bondedDevices!!
-        pairs.find {
-            it.name == "intan"
-        }*/
-    }
 
     val bluetoothEnableChannel = Channel<Status>()
     val bluetoothEnableLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -228,46 +113,6 @@ class MainActivity : ComponentActivity() {
                 permissionChannel.send(Status(false, "Bluetooth permissions denied"))
             }
         }
-    }
-
-    private fun enableBluetooth() {
-        val bluetoothManager = getSystemService(BluetoothManager::class.java)
-        val bluetoothAdapter = bluetoothManager.adapter ?: return
-
-        bluetoothAdapterExists.value = true
-
-        if(bluetoothAdapter.isEnabled) {
-            bluetoothEnabled.value = true
-            findSleeve()
-            return
-        }
-
-        val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-        bluetoothEnableLauncher.launch(enableIntent)
-    }
-
-    fun requestPermissions() {
-        val permissions = listOf(
-            android.Manifest.permission.BLUETOOTH_CONNECT,
-            android.Manifest.permission.BLUETOOTH_SCAN,
-            android.Manifest.permission.ACCESS_FINE_LOCATION,
-            android.Manifest.permission.ACCESS_COARSE_LOCATION)
-        val unpermitted = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_DENIED
-        }
-        if(android.Manifest.permission.BLUETOOTH_CONNECT !in unpermitted
-            && android.Manifest.permission.BLUETOOTH_SCAN !in unpermitted
-            && android.Manifest.permission.ACCESS_FINE_LOCATION !in unpermitted
-            && android.Manifest.permission.ACCESS_COARSE_LOCATION !in unpermitted) {
-            bluetoothAllowed.value = true
-            enableBluetooth()
-            return
-        }
-        if(unpermitted.isEmpty()) {
-            return
-        }
-
-        permissionLauncher.launch(unpermitted.toTypedArray())
     }
 
     data class Status(val success: Boolean, val message: String)
@@ -304,29 +149,27 @@ class MainActivity : ComponentActivity() {
         return bluetoothEnableChannel.receive()
     }
 
-    var ready = false
     suspend fun loop() {
+        val permissionsStatus = checkPermissions()
+        if (!permissionsStatus.success) {
+            error.value = permissionsStatus.message
+            return
+        }
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val bluetoothStatus = checkBluetooth()
+        if (!bluetoothStatus.success) {
+            error.value = bluetoothStatus.message
+            return
+        }
+
         while(true) {
-            val permissionsStatus = checkPermissions()
-            if (!permissionsStatus.success) {
-                error.value = permissionsStatus.message
-                return
-            }
-            if (ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.BLUETOOTH_SCAN
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                return
-            }
-
-            val bluetoothStatus = checkBluetooth()
-            if (!bluetoothStatus.success) {
-                error.value = bluetoothStatus.message
-                return
-            }
-            bluetoothEnabled.value = true
-
             val scanChannel = Channel<BluetoothDevice>()
             val bluetoothManager = getSystemService(BluetoothManager::class.java)
             val bluetoothAdapter = bluetoothManager.adapter!!
@@ -347,6 +190,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            status.value = "Scanning"
             bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
 
             val device = scanChannel.receive()
@@ -396,8 +240,15 @@ class MainActivity : ComponentActivity() {
                         lastTime = now
                     }
 
-                    Block.decodeBlockPacket(ByteBuffer.wrap(value)).forEach {
-                        //sensorDecoders.decodePacket
+                    val blocks = Block.decodeBlockPacket(ByteBuffer.wrap(value)).asSequence().toList()
+                    scope.launch {
+                        blocks.forEach {
+                            when (it.blockId.toInt()) {
+                                2 -> icmNode.process(it)
+                                //4 -> intanNode.process(it)
+                                //5 -> adcNode.process(it)
+                            }
+                        }
                     }
                 }
 
@@ -441,6 +292,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val gatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            status.value = "Connecting"
 
             var connectionState = BluetoothProfile.STATE_DISCONNECTED
             while(connectionState != BluetoothProfile.STATE_CONNECTED) {
@@ -480,39 +332,38 @@ class MainActivity : ComponentActivity() {
             //gatt.writeCharacteristic(txCharacteristic!!, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
             //delay(1000)
             println(1)
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(2, 0, 0, 0, 63))))
+            write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(2, 0, 0, 0, 63))))
             //delay(1000)
             println(2)
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(4, 0, 0, -1, -1))))
+            write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(4, 0, 0, -1, -1))))
             //delay(1000)
             println(3)
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(5, 0, 0, 0, 1))))
+            write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(5, 0, 0, 0, 1))))
             //delay(1000)
             println(4)
 
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(2, 0))))
+            write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(2, 0))))
             println(5)
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(4, 19))))
+            write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(4, 19))))
             println(6)
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(5, 0))))
+            write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(5, 0))))
             println(7)
 
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, ByteBuffer.wrap(byteArrayOf(2, 1))))
+            write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(2, 1))))
             println(1)
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, ByteBuffer.wrap(byteArrayOf(4, 1))))
+            write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(4, 1))))
             println(1)
-            write(Block(BlockType.CMD_BLOCK, CommandBlockId.ID_ENABLE, ByteBuffer.wrap(byteArrayOf(5, 1))))
+            write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(5, 1))))
             println(66666)
             gatt.readCharacteristic(txCharacteristic)
 
-            status.value = "Ready"
-            ready = true
+            status.value = "Connected"
             while(connectionState == BluetoothProfile.STATE_CONNECTED) {
-                status.value = "Ready $connectionState"
+                //status.value = "Ready $connectionState"
                 println(connectionState)
                 connectionState = connectionChannel.receive()
             }
-            ready = false
+            status.value = "Disconnected"
         }
     }
 
@@ -524,85 +375,45 @@ class MainActivity : ComponentActivity() {
             loop()
         }
 
-        scope.launch {
+        /*scope.launch {
             var i = 0
             while(true) {
                 delay(1000)
                 status.value = if(ready) {"ready $i"} else {"waiting $i"}
                 ++i
             }
-        }
+        }*/
 
-        /*val bluetoothManager = getSystemService(BluetoothManager::class.java)
-        val bluetoothAdapter = bluetoothManager.adapter
-        if(bluetoothAdapter != null) {
-            bluetoothAdapterExists.value = true
-            requestPermissions()
-        } else {
-            error.value = "No Bluetooth adapter found"
-        }
-
-        val preferences = PreferenceManager.getDefaultSharedPreferences(this)
-        val id = preferences.getString("id", "")
-        if(id!!.isEmpty()) {
-            preferences.edit().putString("id", UUID.randomUUID().toString()).commit()
-        }
-
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.UNMETERED)
-            .build()
-        val work = PeriodicWorkRequestBuilder<UploadWorker>(1, TimeUnit.DAYS)
-            .setConstraints(constraints)
-            .build()
-        val workManager = WorkManager.getInstance(this)
-        workManager.enqueueUniquePeriodicWork("SleeveUpload", ExistingPeriodicWorkPolicy.KEEP, work)
-
-
-        val filesDir = getExternalFilesDir(null)
-
-        node.ready.connect {
-            val number = node.shorts(0)[0].toInt()
-            value.intValue = number
-        }
-
-*/
         var value = mutableIntStateOf(0)
-        val storage = Storage(this)
-        storage.add("Wave", node)
+        //val storage = Storage(this)
+        //storage.add("Wave", node)
 
         val toggle = {
             node.toggle()
-            if(node.running) {
-                storage.start()
-            } else {
-                storage.stop()
-            }
+            //if(node.running) {
+            //    storage.start()
+            //} else {
+           //     storage.stop()
+            //}
         }
 
         enableEdgeToEdge()
         setContent {
             var count by remember { value }
-            //var bluetoothAllowed by remember { bluetoothAllowed }
-            var bluetoothEnabled by remember { bluetoothEnabled }
-            var intanFound by remember { intanFound }
-            //var bluetoothAdapterExists by remember { bluetoothAdapterExists }
             var error by remember { error }
             var status by remember { status }
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.fillMaxSize()) {
-                        if(error != null) {
+                        /*if(error != null) {
                             Text(error!!, modifier = Modifier.padding(innerPadding), color=Color.Red)
                         } else if (status != null) {
                             Text(status!!, modifier = Modifier.padding(innerPadding));
-                        } else {
-                            Greeting(
-                                name = "Android",
-                                modifier = Modifier.padding(innerPadding)
-                            );
+                        } else {*/
+                            Text(status!!, modifier = Modifier.padding(innerPadding));
                             Button(onClick = {toggle()}) { Text(count.toString())};
-                            Graph(modifier=Modifier.fillMaxSize(), node)
-                        }
+                            Graph(modifier=Modifier.fillMaxSize(), icmNode)
+                        //}
                     }
                 }
             }
@@ -610,8 +421,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+val COLORS = arrayOf(
+    Color.Blue,
+    Color.Green,
+    Color.Red,
+    Color.Cyan,
+    Color.Magenta,
+    Color.Yellow,
+    Color.Gray
+)
+
 @Composable
-fun Graph(modifier: Modifier = Modifier, node: GraphNode) {
+fun Graph(modifier: Modifier = Modifier, node: ICM20948Node) {
     var invalidate by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while(true) {
@@ -620,68 +441,40 @@ fun Graph(modifier: Modifier = Modifier, node: GraphNode) {
         }
     }
 
-    var time = 0.seconds
-    var lastPathTime = (-10).seconds
-    var currentPathTime = 0.seconds
-    var lastPath = Path()
-    var currentPath = Path()
-    var lastX = 0.0f
-    var lastY = 0.0f
-    var rangeMin = Float.POSITIVE_INFINITY
-    var rangeMax = Float.NEGATIVE_INFINITY
+    val signals = mutableListOf<SignalPlot>()
 
     node.ready.connect {
-        val data = node.shorts(0)
-        val interval = node.sampleInterval(0)
-
-        for(d in data) {
-            val x = time.inWholeNanoseconds.toFloat()/1e9f
-            val y = d.toFloat()
-            rangeMin = min(y, rangeMin)
-            rangeMax = max(y, rangeMax)
-            if(currentPath.isEmpty) {
-                if(lastPath.isEmpty) {
-                    currentPath.moveTo(x, y)
-                } else {
-                    currentPath.moveTo(lastX, lastY)
-                    currentPath.lineTo(x, y)
+        if(node.hasAnalogData()) {
+            (0..<node.numChannels()).forEach {
+                while(signals.size <= it) {
+                    signals.add(SignalPlot())
                 }
-            } else {
-                currentPath.lineTo(x, y)
+                val plot = signals[it]
+                val interval = node.sampleInterval(it)
+                if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
+                    val data = node.doubles(it)
+                    while(data.remaining() > 0) {
+                        val sample = data.get()
+                        plot.addSignal(sample, interval.inWholeNanoseconds)
+                    }
+                } else if (node.dataType() == TimeSeriesNode.DataType.SHORT) {
+                    val data = node.shorts(it)
+                    while(data.remaining() > 0) {
+                        val sample = data.get()
+                        plot.addSignal(sample.toDouble(), interval.inWholeNanoseconds)
+                    }
+                }
             }
-            lastX = x
-            lastY = y
-            //println("$lastX $lastY")
-            time += interval
-        }
-
-        if (time - currentPathTime > 10.seconds) {
-            lastPath = currentPath
-            lastPathTime = currentPathTime
-            currentPath = Path()
-            currentPathTime = time
         }
     }
 
     Canvas(modifier=modifier.clipToBounds()) {
         invalidate.apply {}
-        val canvasWidth = size.width
-        val canvasHeight = size.height
-        if(!rangeMax.isInfinite()) {
-            drawRect(Color.Black)
-            val scale = canvasWidth/10
-            val scaleY = canvasHeight/(rangeMax-rangeMin)
-            //val bottom = rangeMin*scaleY
-            translate(0f, canvasHeight+rangeMin*scaleY) {
-                scale(scaleX = scale, scaleY = -scaleY, pivot = Offset(0f,0f)) {
-                    translate(9.9f-time.inWholeMilliseconds/1e3f, 0f) {
-                        drawPath(lastPath, Color.Blue, style=Stroke(width=10f/scale))
-                    }
-                    translate(9.9f-time.inWholeMilliseconds/1e3f, 0f) {
-                        drawPath(currentPath, Color.Blue, style=Stroke(width=10f/scale))
-                    }
-                }
-            }
+        val count = signals.size
+        val pixelSlice = size.height/count
+        drawRect(Color.Black, Offset(0F, 0F), Size(size.width, size.height))
+        signals.forEachIndexed { i, it ->
+            it.draw(this, Rect(0F, i*pixelSlice, size.width, (i+1)*pixelSlice), COLORS[i % COLORS.size])
         }
     }
 }

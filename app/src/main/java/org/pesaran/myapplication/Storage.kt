@@ -22,7 +22,7 @@ class Storage(val context: Context) {
     var running = false
 
     private fun onTimeSeries(name: String, node: TimeSeriesNode) {
-        if(!node.hasAnalogData() || !running) {
+        /*if(!node.hasAnalogData() || !running) {
             return
         }
 
@@ -51,7 +51,7 @@ class Storage(val context: Context) {
         //timeSeriesBuilder.build()
         val record = builder.build()
         //println(record.toString())
-        writeRecord(record)
+        writeRecord(record)*/
     }
 
     val connections = mutableListOf<Signal1<Node>.Connection>()

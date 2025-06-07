@@ -9,37 +9,27 @@ enum class BlockType {
     DATA_BLOCK,
     CMD_BLOCK
 }
-enum class CommandBlockId(val value: Byte) {
-    ID_ENABLE(0),
-    ID_SET_SAMPLE_RATE(1),
-    ID_SET_CHANNEL_MASK(2),
-    ID_STIMULATE(3),
-    ID_ECHO(4),
-    ID_CUSTOM_CONFIG(5)
-}
+val ID_ENABLE: Byte = 0
+val ID_SET_SAMPLE_RATE: Byte = 1
+val ID_SET_CHANNEL_MASK: Byte = 2
+val ID_STIMULATE: Byte = 3
+val ID_ECHO: Byte = 4
+val ID_CUSTOM_CONFIG: Byte = 5
 
-class Block(val blockType: BlockType, val blockId: CommandBlockId, val data: ByteBuffer, val firstPointIdx: Short = -1) {
+class Block(val blockType: BlockType, val blockId: Byte, val data: ByteBuffer, val firstPointIdx: Short = -1) {
     companion object {
         fun decode(packet: ByteBuffer): Block {
             packet.order(ByteOrder.BIG_ENDIAN)
             val totalLenByte = packet.get().toInt()
-            val totalLen = if (totalLenByte < 0) 256 - totalLenByte else totalLenByte
+            val totalLen = if (totalLenByte < 0) 256 + totalLenByte else totalLenByte
 
             val actualLen = Math.min(totalLen-1, packet.remaining())
             val slice = packet.slice(packet.position(), actualLen)
             packet.position(packet.position() + actualLen)
 
             val idByte = slice.get()
-            val isCommandBlock = (idByte and 0b10000000.toByte()).toInt() != 0
-            val blockId = when(val blockCode = (idByte and 0b01111111).toInt()) {
-                0 -> CommandBlockId.ID_ENABLE
-                1 -> CommandBlockId.ID_SET_SAMPLE_RATE
-                2 -> CommandBlockId.ID_SET_CHANNEL_MASK
-                3 -> CommandBlockId.ID_STIMULATE
-                4 -> CommandBlockId.ID_ECHO
-                5 -> CommandBlockId.ID_CUSTOM_CONFIG
-                else -> throw IllegalArgumentException("Unexpected blockId: $blockCode")
-            }
+            val isCommandBlock = (idByte and 0b10000000.toByte()) != 0.toByte()
+            val blockId = idByte and 0b01111111
 
             if (isCommandBlock) {
                 return Block(BlockType.CMD_BLOCK, blockId, slice)
@@ -66,10 +56,10 @@ class Block(val blockType: BlockType, val blockId: CommandBlockId, val data: Byt
         buffer.order(ByteOrder.BIG_ENDIAN)
         buffer.put(totalSize.toByte())
         if(blockType == BlockType.DATA_BLOCK) {
-            buffer.put(blockId.value)
+            buffer.put(blockId)
             buffer.putShort(firstPointIdx)
         } else {
-            buffer.put(blockId.value or 0x80.toByte())
+            buffer.put(blockId or 0x80.toByte())
         }
 
         data.mark()
