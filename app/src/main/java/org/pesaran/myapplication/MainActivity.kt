@@ -8,33 +8,39 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -45,13 +51,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.preference.PreferenceManager
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -60,18 +65,18 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import org.pesaran.myapplication.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.pesaran.myapplication.ui.theme.MyApplicationTheme
 import java.io.File
 import java.nio.ByteBuffer
+import java.util.LinkedList
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import kotlin.math.max
-import kotlin.math.min
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-import java.util.LinkedList
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -278,7 +283,7 @@ class MainActivity : ComponentActivity() {
                         if(status == BluetoothGatt.GATT_SUCCESS) {
                             wroteChannel.send(Status(true, ""))
                         } else {
-                            wroteChannel.send(Status(true, ""))
+                            wroteChannel.send(Status(false, ""))
                         }
                     }
                     println("Wrote $status")
@@ -292,7 +297,7 @@ class MainActivity : ComponentActivity() {
                         if(status == BluetoothGatt.GATT_SUCCESS) {
                             wroteDescriptorChannel.send(Status(true, ""))
                         } else {
-                            wroteDescriptorChannel.send(Status(true, ""))
+                            wroteDescriptorChannel.send(Status(false, ""))
                         }
                     }
                     println("Wrote Descriptor $status")
@@ -321,48 +326,94 @@ class MainActivity : ComponentActivity() {
             val txCharacteristic = uartService!!.getCharacteristic(UART_TX_CHAR_UUID)
             println("txCharacteristic $txCharacteristic")
 
+            val spacing = 800.milliseconds
+            gatt.setCharacteristicNotification(txCharacteristic, true)
+            txCharacteristic.descriptors.forEach {
+                gatt.writeDescriptor(it,  BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                wroteDescriptorChannel.receive()
+            }
+            //delay(spacing)
+
             val write: (suspend (Block) -> Status) = {
                 val data = it.encode()
-                println(gatt)
-                println(rxCharacteristic)
-                println(data)
+                //println(gatt)
+                //println(rxCharacteristic)
+                //println(data)
                 gatt!!.writeCharacteristic(rxCharacteristic!!, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
                 wroteChannel.receive()
             }
 
             //gatt.setCharacteristicNotification(txCharacteristic, false)
             //gatt.writeCharacteristic(txCharacteristic!!, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            //delay(1000)
+            delay(spacing)
             println(1)
-            write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(2, 0, 0, 0, 63))))
-            //delay(1000)
-            println(2)
-            write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(4, 0, 0, -1, -1))))
-            //delay(1000)
-            println(3)
-            write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(5, 0, 0, 0, 1))))
-            //delay(1000)
-            println(4)
-
-            write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(2, 0))))
-            println(5)
-            write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(4, 19))))
-            println(6)
-            write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(5, 0))))
-            println(7)
-
-            write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(2, 1))))
-            println(1)
-            write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(4, 1))))
-            println(1)
-            write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(5, 1))))
-            println(66666)
-            //gatt.readCharacteristic(txCharacteristic)
-            gatt.setCharacteristicNotification(txCharacteristic, true)
-            txCharacteristic.descriptors.forEach {
-                gatt.writeDescriptor(it,  BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                wroteDescriptorChannel.receive()
+            var writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(2, 0, 0, 0, 63))))
+            if(!writeStatus.success) {
+                continue;
             }
+            delay(spacing)
+            println(2)
+            //delay(1.seconds)
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(4, 0, 0, -1, -1))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println(3)
+            //delay(1.seconds)
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(5, 0, 0, 0, 1))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println(4)
+            //delay(1.seconds)
+
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(2, 0))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println(5)
+            //delay(1.seconds)
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(4, 19))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println(6)
+            //delay(1.seconds)
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(5, 0))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println(7)
+            //delay(1.seconds)
+
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(2, 1))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println(1)
+            //delay(1.seconds)
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(4, 1))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println(1)
+            //delay(1.seconds)
+            writeStatus = write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(5, 1))))
+            if(!writeStatus.success) {
+                continue;
+            }
+            delay(spacing)
+            println("Pause")
+            //gatt.readCharacteristic(txCharacteristic)
+            //delay(1.seconds)
+            println("Streaming")
 
             status.value = "Connected"
             while(connectionState == BluetoothProfile.STATE_CONNECTED) {
@@ -374,27 +425,86 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    fun clearData() {
+        val filesDir = getExternalFilesDir(null)
+        val recordingDir = File(filesDir, "recording")
+        recordingDir?.listFiles()?.forEach {
+            println(it)
+            it.delete()
+        }
+    }
+
+    fun shareData() {
+        val uris = ArrayList<Uri>()
+        val filesDir = getExternalFilesDir(null)
+        val recordingDir = File(filesDir, "recording")
+        recordingDir.listFiles()?.forEach {
+            val uri = FileProvider.getUriForFile(
+                this,
+                applicationContext.packageName + ".provider",
+                it
+            )
+            uris.add(uri)
+        }
+        println(uris)
+
+        val shareIntent = Intent().apply {
+            action = Intent.ACTION_SEND_MULTIPLE
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            type = "application/octet-stream"
+        }
+        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(shareIntent, null))
+    }
+
+    suspend fun calibration(prompt: MutableState<Int?>) {
+        try {
+            prompt.value = R.drawable.calibration_1
+            delay(5.seconds)
+            prompt.value = R.drawable.calibration_2
+            delay(5.seconds)
+            prompt.value = R.drawable.calibration_3
+            delay(5.seconds)
+            prompt.value = R.drawable.calibration_4
+            delay(5.seconds)
+            prompt.value = R.drawable.calibration_5
+            delay(5.seconds)
+            prompt.value = R.drawable.calibration_6
+            delay(5.seconds)
+            prompt.value = R.drawable.calibration_7
+            delay(5.seconds)
+        } finally {
+            prompt.value = null
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
     @SuppressLint("ApplySharedPref")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build()
+
+        val workRequest = PeriodicWorkRequestBuilder<UploadWorker>(1, TimeUnit.HOURS)
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork("sleeve-data-upload",
+            ExistingPeriodicWorkPolicy.UPDATE, workRequest)
 
         scope.launch {
             loop()
         }
 
-        /*scope.launch {
-            var i = 0
-            while(true) {
-                delay(1000)
-                status.value = if(ready) {"ready $i"} else {"waiting $i"}
-                ++i
-            }
-        }*/
-
         var value = mutableIntStateOf(0)
         var recording = mutableStateOf(false)
-        //val storage = Storage(this)
+        var confirmClearState = mutableStateOf(false)
+        val promptState = mutableStateOf<Int?>(null)
+        val storage = Storage(this)
         //storage.add("Wave", node)
+        storage.add("Intan", intanNode)
+        storage.add("ICM", icmNode)
+        storage.add("ADC", adcNode)
 
         val toggle = {
             node.toggle()
@@ -411,6 +521,11 @@ class MainActivity : ComponentActivity() {
             var error by remember { error }
             var status by remember { status }
             var recording by remember { recording }
+            var confirmClear by remember { confirmClearState }
+            var expanded by remember { mutableStateOf(false) }
+            var selectPlot by remember { mutableStateOf("ICM") }
+            var prompt by remember { promptState }
+            var promptJob by remember {mutableStateOf<Job?>(null)}
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -419,21 +534,105 @@ class MainActivity : ComponentActivity() {
                         } else if (status != null) {
                             Text(status!!, modifier = Modifier.padding(innerPadding));
                         } else {*/
-                            Text(status!!, modifier = Modifier.padding(innerPadding));
 
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
+                        Text("Status: $status", modifier = Modifier.padding(innerPadding))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Button(onClick = {
+                                confirmClearState.value = true
+                            }) { Text("Clear Data") }
+                            Button(onClick = { shareData() }) { Text("Share Data") }
+                        }
+
+                        if (confirmClear) {
+                            AlertDialog(
+                                onDismissRequest = { confirmClearState.value = false },
+                                confirmButton = {
+                                    Button(onClick = {
+                                        clearData()
+                                        confirmClearState.value = false
+                                    }) { Text("Confirm") }
+                                },
+                                dismissButton = {
+                                    Button(onClick = {
+                                        confirmClearState.value = false
+                                    }) { Text("Cancel") }
+                                },
+                                title = { Text("Clear Data") },
+                                text = { Text("Clear Data?") })
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Record")
+                            Checkbox(
+                                checked = recording,
+                                onCheckedChange = {
+                                    recording = it
+                                    if (recording) {
+                                        storage.start()
+                                        promptJob = scope.launch {
+                                            calibration(promptState)
+                                        }
+                                    } else {
+                                        storage.stop()
+                                        promptJob?.let { it.cancel() }
+                                    }
+                                }
+                            )
+                        }
+
+                        Box {
+                            Button(onClick = { expanded = !expanded }) {
+                                Text(selectPlot)
+                            }
+                            DropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false }
                             ) {
-                                Text(
-                                    "Minimal checkbox"
+                                DropdownMenuItem(
+                                    text = { Text("ICM") },
+                                    onClick = {
+                                        expanded = false
+                                        selectPlot = "ICM"
+                                    }
                                 )
-                                Checkbox(
-                                    checked = recording,
-                                    onCheckedChange = { recording = it }
+                                DropdownMenuItem(
+                                    text = { Text("Intan") },
+                                    onClick = {
+                                        expanded = false
+                                        selectPlot = "Intan"
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("ADC") },
+                                    onClick = {
+                                        expanded = false
+                                        selectPlot = "ADC"
+                                    }
                                 )
                             }
-                            Button(onClick = {toggle()}) { Text(count.toString())};
-                            Graph(modifier=Modifier.fillMaxSize(), adcNode)
+                        }
+
+                        //if(prompt != null) {
+                            prompt?.let {Image(
+                                painter = painterResource(id = it), "",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize())}
+                        //} else {
+                            if(selectPlot == "ICM") {
+                                Graph(modifier = Modifier.fillMaxSize(), icmNode)
+                            } else if(selectPlot == "Intan") {
+                                Graph(modifier = Modifier.fillMaxSize(), intanNode)
+                            } else if(selectPlot == "ADC") {
+                                Graph(modifier = Modifier.fillMaxSize(), adcNode)
+                            }
+                        //}
+
+
+                        //Button(onClick = {toggle()}) { Text(count.toString())};
                         //}
                     }
                 }
@@ -455,39 +654,44 @@ val COLORS = arrayOf(
 @Composable
 fun <T> Graph(modifier: Modifier = Modifier, node: T) where T : Node, T: TimeSeriesNode {
     var invalidate by remember { mutableIntStateOf(0) }
+    val signals by remember { mutableStateOf<MutableList<SignalPlot>>(mutableListOf<SignalPlot>()) }
     LaunchedEffect(Unit) {
-        while(true) {
-            delay(16)
-            ++invalidate
-        }
-    }
-
-    val signals = mutableListOf<SignalPlot>()
-
-    node.ready.connect {
-        if(node.hasAnalogData()) {
-            (0..<node.numChannels()).forEach {
-                while(signals.size <= it) {
-                    signals.add(SignalPlot())
-                }
-                val plot = signals[it]
-                val interval = node.sampleInterval(it)
-                if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
-                    val data = node.doubles(it)
-                    while(data.remaining() > 0) {
-                        val sample = data.get()
-                        plot.addSignal(sample, interval.inWholeNanoseconds)
+        val connection = node.ready.connect {
+            if(node.hasAnalogData()) {
+                (0..<node.numChannels()).forEach {
+                    while(signals.size <= it) {
+                        signals.add(SignalPlot())
                     }
-                } else if (node.dataType() == TimeSeriesNode.DataType.SHORT) {
-                    val data = node.shorts(it)
-                    while(data.remaining() > 0) {
-                        val sample = data.get()
-                        plot.addSignal(sample.toDouble(), interval.inWholeNanoseconds)
+                    val plot = signals[it]
+                    val interval = node.sampleInterval(it)
+                    if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
+                        val data = node.doubles(it)
+                        while(data.remaining() > 0) {
+                            val sample = data.get()
+                            plot.addSignal(sample, interval.inWholeNanoseconds)
+                        }
+                    } else if (node.dataType() == TimeSeriesNode.DataType.SHORT) {
+                        val data = node.shorts(it)
+                        while(data.remaining() > 0) {
+                            val sample = data.get()
+                            plot.addSignal(sample.toDouble(), interval.inWholeNanoseconds)
+                        }
                     }
                 }
             }
         }
+
+        try {
+            while(true) {
+                delay(16)
+                ++invalidate
+            }
+        } finally {
+            connection.disconnect()
+        }
+
     }
+
 
     Canvas(modifier=modifier.clipToBounds()) {
         invalidate.apply {}

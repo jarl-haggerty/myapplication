@@ -17,12 +17,21 @@ import java.time.Instant
 import java.time.LocalDate
 import java.util.Date
 import kotlin.time.TimeSource
+import androidx.core.content.edit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.time.Duration.Companion.seconds
 
 class Storage(val context: Context) {
     var running = false
 
     private fun onTimeSeries(name: String, node: TimeSeriesNode) {
-        /*if(!node.hasAnalogData() || !running) {
+        if(!node.hasAnalogData() || !running) {
             return
         }
 
@@ -32,16 +41,28 @@ class Storage(val context: Context) {
             .setNode(name)
         val timeSeriesBuilder = builder.analogBuilder
         timeSeriesBuilder.setTime(node.time().inWholeNanoseconds)
+        if(node.dataType() == TimeSeriesNode.DataType.SHORT) {
+            timeSeriesBuilder.setIsIntData(true)
+        }
 
         for(i in 0..<node.numChannels()) {
             val begin = count
             if(node.dataType() == TimeSeriesNode.DataType.SHORT) {
                 val data = node.shorts(i)
-                count += data.size
-                timeSeriesBuilder.addAllIntData(node.shorts(i).map { it.toInt() })
+                count += data.remaining()
+                while(data.remaining() > 0) {
+                    timeSeriesBuilder.addIntData(data.get().toInt())
+                }
+                timeSeriesBuilder.addSampleIntervals(node.sampleInterval(i).inWholeNanoseconds)
+            } else if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
+                val data = node.doubles(i)
+                count += data.remaining()
+                while(data.remaining() > 0) {
+                    timeSeriesBuilder.addData(data.get())
+                }
                 timeSeriesBuilder.addSampleIntervals(node.sampleInterval(i).inWholeNanoseconds)
             }
-            val spanBuilder = timeSeriesBuilder.addSpansBuilder()
+            timeSeriesBuilder.addSpansBuilder()
                 .setName(node.name(i))
                 .setBegin(begin)
                 .setEnd(count)
@@ -51,7 +72,7 @@ class Storage(val context: Context) {
         //timeSeriesBuilder.build()
         val record = builder.build()
         //println(record.toString())
-        writeRecord(record)*/
+        writeRecord(record)
     }
 
     val connections = mutableListOf<Signal1<Node>.Connection>()
@@ -70,6 +91,7 @@ class Storage(val context: Context) {
 
     var outputStream: OutputStream? = null
     var outputFile: File? = null
+    var outputStartTime: Duration = 0.seconds
 
     private fun writeRecord(record: StorageRecord) {
         val size = record.serializedSize.toLong()
@@ -106,42 +128,36 @@ class Storage(val context: Context) {
     }
 
     private fun checkOutput() {
-        try {
-            //Are we running
-            if(!running) {
-                return
-            }
-            //Was output assigned
-            if(outputFile == null) {
-                return
-            }
-            //Does output exist
-            val file = outputFile!!
-            if(!file.exists()) {
-                return
-            }
-
-            val stream = file.inputStream()
-            val record = readRecord(file.inputStream())
-            stream.close()
-            //Record first record exist
-            if(record == null) {
-                return
-            }
-
-            val time = System.nanoTime()
-            //Is first record 1 hour old
-            if(time - record.time < 3600e9) {
-              return
-            }
-
-            //Start new file
-            prepareStorage()
-        } finally {
-            if(running) {
-                Handler(Looper.getMainLooper()).postDelayed({checkOutput()}, 60000)
-            }
+        //Are we running
+        if(!running) {
+            return
         }
+        //Was output assigned
+        if(outputFile == null) {
+            return
+        }
+        //Does output exist
+        val file = outputFile!!
+        if(!file.exists()) {
+            return
+        }
+
+        val stream = file.inputStream()
+        val record = readRecord(file.inputStream())
+        stream.close()
+        //Does first record exist
+        if(record == null) {
+            return
+        }
+
+        val time = System.nanoTime().nanoseconds
+        //Is first record 1 hour old
+        if(time - outputStartTime < 1.hours) {
+            return
+        }
+
+        //Start new file
+        prepareStorage()
     }
 
     //We should update "recording-file" before we start writing
@@ -156,25 +172,33 @@ class Storage(val context: Context) {
         val day = now.dayOfMonth.toString().padStart(2, '0')
         var file = File(recordingDir, "sleeve.tha.${now.year}${month}${day}.${rec}")
         while(file.exists()) {
-            ++rec
-            file = File(recordingDir, "sleeve.tha.${now.year}${month}${day}.${rec}")
+            file = File(recordingDir, "sleeve.tha.${now.year}${month}${day}.${++rec}")
         }
         outputStream?.close()
         val preferences = PreferenceManager.getDefaultSharedPreferences(context)
-        preferences.edit().putString("recording-file", outputFile.toString()).commit()
+        preferences.edit(commit = true) { putString("recording-file", outputFile.toString()) }
         outputFile = file
         outputStream = file.outputStream()
-        val startRecord = ThalamusOuterClass.StorageRecord.newBuilder()
-            .setTime(System.nanoTime())
-            .setNode("start-time")
-            .build()
-        writeRecord(startRecord)
+        outputStartTime = System.nanoTime().nanoseconds
+    }
+
+    val scope = CoroutineScope(Dispatchers.Main)
+
+    var looping = false
+    suspend fun loop() {
+        while(true) {
+            delay(1.seconds)
+            checkOutput()
+        }
     }
 
     fun start() {
         running = true
         prepareStorage()
-        checkOutput()
+        if(!looping) {
+            looping = true
+            scope.launch { loop() }
+        }
     }
 
     fun stop() {

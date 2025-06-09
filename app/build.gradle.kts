@@ -76,11 +76,11 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-    val work_version = "2.10.1"
 
     // (Java only)
-    implementation("androidx.work:work-runtime:$work_version")
+    implementation(libs.androidx.work.runtime)
 
     // Kotlin + coroutines
-    implementation("androidx.work:work-runtime-ktx:$work_version")
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.core.splashscreen)
 }
