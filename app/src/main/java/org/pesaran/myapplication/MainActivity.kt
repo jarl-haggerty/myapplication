@@ -24,9 +24,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,6 +38,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -191,9 +194,13 @@ class MainActivity : ComponentActivity() {
             }
 
             status.value = "Scanning"
-            bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
-
-            val device = scanChannel.receive()
+            var device: BluetoothDevice? = null
+            //if (!deviceAddress.isNullOrEmpty()) {
+            //    device = bluetoothAdapter.getRemoteDevice(deviceAddress)
+            //} else {
+                bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
+                device = scanChannel.receive()
+            //}
 
             data class TimeSize(val time: Long, val count: Long)
             var lastTime = System.currentTimeMillis()
@@ -246,7 +253,7 @@ class MainActivity : ComponentActivity() {
                             when (it.blockId.toInt()) {
                                 2 -> icmNode.process(it)
                                 4 -> intanNode.process(it)
-                                //5 -> adcNode.process(it)
+                                5 -> adcNode.process(it)
                             }
                         }
                     }
@@ -324,11 +331,6 @@ class MainActivity : ComponentActivity() {
             }
 
             //gatt.setCharacteristicNotification(txCharacteristic, false)
-            gatt.setCharacteristicNotification(txCharacteristic, true)
-            txCharacteristic.descriptors.forEach {
-                gatt.writeDescriptor(it,  BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                wroteDescriptorChannel.receive()
-            }
             //gatt.writeCharacteristic(txCharacteristic!!, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
             //delay(1000)
             println(1)
@@ -355,7 +357,12 @@ class MainActivity : ComponentActivity() {
             println(1)
             write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(5, 1))))
             println(66666)
-            gatt.readCharacteristic(txCharacteristic)
+            //gatt.readCharacteristic(txCharacteristic)
+            gatt.setCharacteristicNotification(txCharacteristic, true)
+            txCharacteristic.descriptors.forEach {
+                gatt.writeDescriptor(it,  BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                wroteDescriptorChannel.receive()
+            }
 
             status.value = "Connected"
             while(connectionState == BluetoothProfile.STATE_CONNECTED) {
@@ -385,6 +392,7 @@ class MainActivity : ComponentActivity() {
         }*/
 
         var value = mutableIntStateOf(0)
+        var recording = mutableStateOf(false)
         //val storage = Storage(this)
         //storage.add("Wave", node)
 
@@ -402,6 +410,7 @@ class MainActivity : ComponentActivity() {
             var count by remember { value }
             var error by remember { error }
             var status by remember { status }
+            var recording by remember { recording }
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -411,8 +420,20 @@ class MainActivity : ComponentActivity() {
                             Text(status!!, modifier = Modifier.padding(innerPadding));
                         } else {*/
                             Text(status!!, modifier = Modifier.padding(innerPadding));
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "Minimal checkbox"
+                                )
+                                Checkbox(
+                                    checked = recording,
+                                    onCheckedChange = { recording = it }
+                                )
+                            }
                             Button(onClick = {toggle()}) { Text(count.toString())};
-                            Graph(modifier=Modifier.fillMaxSize(), intanNode)
+                            Graph(modifier=Modifier.fillMaxSize(), adcNode)
                         //}
                     }
                 }
@@ -432,7 +453,7 @@ val COLORS = arrayOf(
 )
 
 @Composable
-fun Graph(modifier: Modifier = Modifier, node: IntanRHDNode) {
+fun <T> Graph(modifier: Modifier = Modifier, node: T) where T : Node, T: TimeSeriesNode {
     var invalidate by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while(true) {

@@ -2,6 +2,7 @@ package org.pesaran.myapplication
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.DoubleBuffer
 import java.nio.ShortBuffer
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
@@ -16,7 +17,7 @@ class ADCNode : IADCNode {
     private var lastTime = 0.seconds
     private var currentTime = 0.seconds
     private var timestamp = 0.seconds
-    private val _numChannels = 5
+    private val _numChannels = 1
     private var numSamples = 0
 
     fun process(block: Block) {
@@ -59,7 +60,7 @@ class ADCNode : IADCNode {
         ready(this)
     }
 
-    override fun dataType() = TimeSeriesNode.DataType.SHORT
+    override fun dataType() = TimeSeriesNode.DataType.DOUBLE
 
     override fun numChannels() = _numChannels
 
@@ -69,20 +70,15 @@ class ADCNode : IADCNode {
 
     override fun name(channel: Int): String {
         return when(channel) {
-            0 -> "acc_x"
-            1 -> "acc_y"
-            2 -> "acc_z"
-            3 -> "gyro_x"
-            4 -> "gyro_y"
-            5 -> "gyro_z"
+            0 -> "ch0"
             else -> ""
         }
     }
 
-    override fun shorts(channel: Int): ShortBuffer {
+    override fun doubles(channel: Int): DoubleBuffer {
         val result = outputData
             .asReadOnlyBuffer()
-            .asShortBuffer()
+            .asDoubleBuffer()
         result.position(channel*numSamples)
         result.limit((channel+1)*numSamples)
         return result
