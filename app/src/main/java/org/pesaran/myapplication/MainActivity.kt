@@ -485,12 +485,13 @@ class MainActivity : ComponentActivity() {
 
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build()
 
-        val workRequest = PeriodicWorkRequestBuilder<UploadWorker>(1, TimeUnit.HOURS)
+        val workRequest = PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
             .setConstraints(constraints)
             .build()
 
+        val workInfo = WorkManager.getInstance(this).getWorkInfosForUniqueWork("sleeve-data-upload")
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("sleeve-data-upload",
-            ExistingPeriodicWorkPolicy.UPDATE, workRequest)
+            ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE, workRequest)
 
         scope.launch {
             loop()

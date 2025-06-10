@@ -9,11 +9,22 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 import androidx.core.content.edit
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.client.call.*
+import io.ktor.http.*
+import io.ktor.util.cio.*
+import io.ktor.client.request.forms.*
+import io.ktor.utils.io.streams.*
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
 
 class UploadWorker(appContext: Context, workerParams: WorkerParameters) : Worker(appContext, workerParams) {
 
     override fun doWork(): Result {
-        val host = "http://128.91.19.194"
+        val host = "http://128.91.19.194:8081"
 
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         var uuid = preferences.getString("uuid", "")
@@ -29,23 +40,27 @@ class UploadWorker(appContext: Context, workerParams: WorkerParameters) : Worker
         val recordingDir = File(filesDir, "recording")
         recordingDir.mkdir()
 
-
-        val now = System.currentTimeMillis()
-        recordingDir.listFiles().filter { now - it.lastModified() > 10e3 }.filter {
-            val url = URL("$host/exists/?uuid=$uuid&path=${it.name}")
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            val text = connection.inputStream.bufferedReader().use { it.readText() }
-            text.trim().lowercase() != "true"
-        }.forEach {
-            val url = URL("$host/exists/?upload=$uuid&path=${it.name}")
-            val connection = url.openConnection() as HttpURLConnection
-            connection.doOutput = true
-            connection.requestMethod = "POST"
-            val fileStream = it.inputStream()
-            fileStream.copyTo(connection.outputStream)
-            fileStream.close()
-            connection.outputStream.close()
+        runBlocking {
+            val client = HttpClient(CIO)
+            val now = System.currentTimeMillis()
+            recordingDir.listFiles().filter { now - it.lastModified() > 10e3 }.filter {
+                val response = client.get("$host/exists?uuid=$uuid&path=${it.name}")
+                val text: String = response.body()
+                val cleaned = text.trim().lowercase()
+                cleaned != "true"
+            }.forEach {
+                val response = client.submitFormWithBinaryData(
+                    url = "$host/upload?uuid=$uuid&path=${it.name}",
+                    formData = formData {
+                        append(it.name, it.inputStream().asInput(), Headers.build {
+                            append(HttpHeaders.ContentType, "application/octet-stream")
+                            append(HttpHeaders.ContentDisposition, "filename=\"${it.name}\"")
+                        })
+                    }
+                )
+                println("uplaaded $it ${it.length()}")
+                println("response $response")
+            }
         }
 
         return Result.success()
