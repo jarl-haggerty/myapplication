@@ -1,30 +1,48 @@
 package org.pesaran.myapplication
 
 import android.content.Context
+import androidx.core.content.edit
 import androidx.preference.PreferenceManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.UUID
-import androidx.core.content.edit
 import io.ktor.client.*
+import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
+import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
-import io.ktor.client.call.*
 import io.ktor.http.*
 import io.ktor.util.cio.*
-import io.ktor.client.request.forms.*
 import io.ktor.utils.io.streams.*
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import java.io.File
+import java.security.KeyStore
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import java.util.UUID
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 
-class UploadWorker(appContext: Context, workerParams: WorkerParameters) : Worker(appContext, workerParams) {
+class UploadWorker(val appContext: Context, workerParams: WorkerParameters) : Worker(appContext, workerParams) {
 
     override fun doWork(): Result {
-        val host = "http://128.91.19.194:8081"
+        val host = "https://20.55.36.17"
+
+        val certStream = appContext.getResources().openRawResource(R.raw.sleeve_d50fb63dd19340d2b20aaebeeaf168d4)
+        val cf = CertificateFactory.getInstance("X.509")
+        val ca = cf.generateCertificate(certStream)
+        certStream.close()
+
+        val keyStore: KeyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+        keyStore.load(null, null)
+        keyStore.setCertificateEntry("ca", ca)
+
+        val tmfAlgorithm = TrustManagerFactory.getDefaultAlgorithm()
+        val tmf = TrustManagerFactory.getInstance(tmfAlgorithm)
+        tmf.init(keyStore)
+
+
 
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         var uuid = preferences.getString("uuid", "")
@@ -41,7 +59,13 @@ class UploadWorker(appContext: Context, workerParams: WorkerParameters) : Worker
         recordingDir.mkdir()
 
         runBlocking {
-            val client = HttpClient(CIO)
+            val client = HttpClient(CIO) {
+                engine {
+                    https {
+                        trustManager = tmf.trustManagers?.first { it is X509TrustManager } as X509TrustManager
+                    }
+                }
+            }
             val now = System.currentTimeMillis()
             recordingDir.listFiles().filter { now - it.lastModified() > 10e3 }.filter {
                 val response = client.get("$host/exists?uuid=$uuid&path=${it.name}")
