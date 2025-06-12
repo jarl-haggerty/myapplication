@@ -15,6 +15,7 @@ import android.bluetooth.le.ScanResult
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build.VERSION.SDK_INT
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -76,6 +77,12 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+//import coil3.ImageLoader
+//import coil3.ImageDecoderDecoder
+//import coil3.GifDecoder
+import coil3.compose.rememberAsyncImagePainter
+import kotlin.math.log10
+import kotlin.math.sqrt
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -94,6 +101,7 @@ class MainActivity : ComponentActivity() {
     val icmNode = ICM20948Node()
     private var error = mutableStateOf<String?>(null)
     private var status = mutableStateOf<String>("")
+    private var calibrationStatus = mutableStateOf<String>("")
 
     val bluetoothEnableChannel = Channel<Status>()
     val bluetoothEnableLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -457,23 +465,102 @@ class MainActivity : ComponentActivity() {
     }
 
     suspend fun calibration(prompt: MutableState<Int?>) {
+        calibrationStatus.value = "Calibrating"
+        var channel = 0
+        var elapsed = 0.seconds
+        var window = LinkedList<Double>()
+        var windowSize = 100.milliseconds
+        var sum = 0.0
+        var count = 0L
+
+        var powerSum = 0.0
+        var powerCount = 0.0
+        var restPower = 0.0
+        var activePower = 0.0
+        var snr = 0.0
+        val clear = {
+            channel = 0
+            elapsed = 0.seconds
+            window = LinkedList<Double>()
+            sum = 0.0
+            count = 0L
+            powerSum = 0.0
+            powerCount = 0.0
+        }
+
+        val connection = intanNode.ready.connect {
+            if(!intanNode.hasAnalogData()) {
+                return@connect
+            }
+
+            val data = intanNode.doubles(channel)
+            val sampleInterval = intanNode.sampleInterval(channel)
+            while(data.remaining() > 0) {
+                val sample = data.get()
+                window.add(sample)
+                sum += sample
+                while(sampleInterval*window.size >= windowSize) {
+                    sum -= window.first()
+                    window.removeFirst()
+                }
+                elapsed += sampleInterval
+                if (elapsed < windowSize) {
+                    continue
+                }
+
+                val mean = sum / window.size
+                val amplitude = sample - mean
+                powerSum += amplitude*amplitude
+                ++powerCount
+                calibrationStatus.value = "${powerSum/powerCount}"
+            }
+        }
         try {
+            clear()
+            channel = 6
+            prompt.value = R.drawable.rest
+            delay(5.seconds)
+            restPower = sqrt(powerSum.toDouble() / powerCount)
+
+            clear()
+            channel = 6
             prompt.value = R.drawable.calibration_1
+            delay(5.seconds)
+            activePower = sqrt(powerSum.toDouble() / powerCount)
+            snr = 10*log10(activePower / restPower)
+            if(snr < 14) {
+                calibrationStatus.value = "Bad SNR for channel ${channel+1}, $snr"
+                return
+            }
+            calibrationStatus.value = "Good SNR for channel ${channel+1}, $snr"
+
+            /*prompt.value = R.drawable.rest
             delay(5.seconds)
             prompt.value = R.drawable.calibration_2
             delay(5.seconds)
+            prompt.value = R.drawable.rest
+            delay(5.seconds)
             prompt.value = R.drawable.calibration_3
+            delay(5.seconds)
+            prompt.value = R.drawable.rest
             delay(5.seconds)
             prompt.value = R.drawable.calibration_4
             delay(5.seconds)
+            prompt.value = R.drawable.rest
+            delay(5.seconds)
             prompt.value = R.drawable.calibration_5
+            delay(5.seconds)
+            prompt.value = R.drawable.rest
             delay(5.seconds)
             prompt.value = R.drawable.calibration_6
             delay(5.seconds)
-            prompt.value = R.drawable.calibration_7
+            prompt.value = R.drawable.rest
             delay(5.seconds)
+            prompt.value = R.drawable.calibration_7
+            delay(5.seconds)*/
         } finally {
             prompt.value = null
+            connection.disconnect()
         }
     }
 
@@ -481,6 +568,12 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("ApplySharedPref")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        /*SingletonImageLoader.setSafe { context ->
+            ImageLoader.Builder(context)
+                .crossfade(true)
+                .build()
+        }*/
 
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build()
 
@@ -520,12 +613,24 @@ class MainActivity : ComponentActivity() {
             var count by remember { value }
             var error by remember { error }
             var status by remember { status }
+            var calibrationStatus by remember { calibrationStatus }
             var recording by remember { recording }
             var confirmClear by remember { confirmClearState }
             var expanded by remember { mutableStateOf(false) }
             var selectPlot by remember { mutableStateOf("ICM") }
             var prompt by remember { promptState }
             var promptJob by remember {mutableStateOf<Job?>(null)}
+
+            /*val imageLoader = ImageLoader.Builder(applicationContext)
+                .components {
+                    if (SDK_INT >= 28) {
+                        add(ImageDecoderDecoder.Factory())
+                    } else {
+                        add(GifDecoder.Factory())
+                    }
+                }
+                .build()*/
+
             SleeveTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -535,7 +640,8 @@ class MainActivity : ComponentActivity() {
                             Text(status!!, modifier = Modifier.padding(innerPadding));
                         } else {*/
 
-                        Text("Status: $status", modifier = Modifier.padding(innerPadding))
+                        Text("Connection Status: $status", modifier = Modifier.padding(innerPadding))
+                        Text("Calibration Status: $calibrationStatus", modifier = Modifier.padding(innerPadding))
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -618,7 +724,8 @@ class MainActivity : ComponentActivity() {
 
                         //if(prompt != null) {
                             prompt?.let {Image(
-                                painter = painterResource(id = it), "",
+                                painter = rememberAsyncImagePainter(it)
+                                , "",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize())}
                         //} else {
