@@ -1,6 +1,4 @@
-package org.pesaran.myapplication
-
-import kotlin.math.sign
+package org.pesaran.sleeve
 
 class Signal1<T> {
     inner class Connection(val signal: Signal1<T>, val callback: (T) -> Unit) {

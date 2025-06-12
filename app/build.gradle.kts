@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "org.pesaran.myapplication"
+    namespace = "org.pesaran.sleeve"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "org.pesaran.myapplication"
+        applicationId = "org.pesaran.sleeve"
         minSdk = 34
         targetSdk = 34
         versionCode = 1

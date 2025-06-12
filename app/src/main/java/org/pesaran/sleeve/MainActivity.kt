@@ -1,4 +1,4 @@
-package org.pesaran.myapplication
+package org.pesaran.sleeve
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -40,7 +40,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,7 +68,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.pesaran.myapplication.ui.theme.MyApplicationTheme
+import org.pesaran.sleeve.ui.theme.SleeveTheme
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.LinkedList
@@ -527,7 +526,7 @@ class MainActivity : ComponentActivity() {
             var selectPlot by remember { mutableStateOf("ICM") }
             var prompt by remember { promptState }
             var promptJob by remember {mutableStateOf<Job?>(null)}
-            MyApplicationTheme {
+            SleeveTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.fillMaxSize()) {
                         /*if(error != null) {
@@ -716,7 +715,7 @@ fun Greeting(name: String, modifier: Modifier = Modifier) {
 @Preview(showBackground = true)
 @Composable
 fun GreetingPreview() {
-    MyApplicationTheme {
+    SleeveTheme {
         Greeting("Android")
     }
 }

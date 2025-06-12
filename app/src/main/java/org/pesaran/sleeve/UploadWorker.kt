@@ -1,4 +1,4 @@
-package org.pesaran.myapplication
+package org.pesaran.sleeve
 
 import android.content.Context
 import androidx.core.content.edit
@@ -18,9 +18,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
 import java.util.UUID
-import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
@@ -41,8 +39,6 @@ class UploadWorker(val appContext: Context, workerParams: WorkerParameters) : Wo
         val tmfAlgorithm = TrustManagerFactory.getDefaultAlgorithm()
         val tmf = TrustManagerFactory.getInstance(tmfAlgorithm)
         tmf.init(keyStore)
-
-
 
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         var uuid = preferences.getString("uuid", "")

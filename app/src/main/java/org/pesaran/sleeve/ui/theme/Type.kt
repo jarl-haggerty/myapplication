@@ -1,4 +1,4 @@
-package org.pesaran.myapplication.ui.theme
+package org.pesaran.sleeve.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

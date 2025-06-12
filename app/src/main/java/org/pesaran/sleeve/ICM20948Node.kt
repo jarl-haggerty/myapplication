@@ -1,16 +1,14 @@
-package org.pesaran.myapplication
+package org.pesaran.sleeve
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.DoubleBuffer
 import java.nio.ShortBuffer
-import kotlin.experimental.and
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
 
-private interface IIntanRHDNode : Node, TimeSeriesNode {}
-class IntanRHDNode : IIntanRHDNode {
+private interface IICM20948Node : Node, TimeSeriesNode {}
+class ICM20948Node : IICM20948Node {
     override var ready = Signal1<Node>()
     override var channelsChanged = Signal1<TimeSeriesNode>()
     private var outputData = ByteBuffer.allocate(1)
@@ -18,7 +16,7 @@ class IntanRHDNode : IIntanRHDNode {
     private var lastTime = 0.seconds
     private var currentTime = 0.seconds
     private var timestamp = 0.seconds
-    private val _numChannels = 16
+    private val _numChannels = 6
     private var numSamples = 0
 
     fun process(block: Block) {
@@ -39,65 +37,45 @@ class IntanRHDNode : IIntanRHDNode {
 
         var currentChannel = 0
         var currentSample = 0
-        outputData = ByteBuffer.allocate(8 * numPoints)
+        outputData = ByteBuffer.allocate(2*numPoints)
         while(data.remaining() > 1) {
-            val value = if(data.remaining() > 1) {
-                data.getShort()
-            } else {
-                (data.get().toInt() shl 8).toShort()
-            }
-            if(value > 0) {
-                val offset = value - 0x8000
-                val result = offset * .195/1000
-                outputData.putDouble((currentChannel*numSamples+currentSample)*8, result)
-            } else {
-                val offset = value and 0x7FFF
-                val result = offset * .195/1000
-                outputData.putDouble((currentChannel*numSamples+currentSample)*8, result)
-            }
+            outputData.putShort((currentChannel*numSamples+currentSample)*2, data.getShort())
             currentChannel = (currentChannel + 1) % _numChannels
             if(currentChannel == 0) {
                 ++currentSample
             }
         }
+        if (data.remaining() > 0) {
+            outputData.put((currentChannel*numSamples+currentSample)*2, data.get())
+        }
         timestamp = System.nanoTime().nanoseconds
         ready(this)
     }
 
-    override fun dataType() = TimeSeriesNode.DataType.DOUBLE
+    override fun dataType() = TimeSeriesNode.DataType.SHORT
 
     override fun numChannels() = _numChannels
 
-    override fun sampleInterval(channel: Int) =  1.milliseconds
+    override fun sampleInterval(channel: Int) =  10.milliseconds
 
     override fun time() = timestamp
 
     override fun name(channel: Int): String {
         return when(channel) {
-            0 -> "ch0"
-            1 -> "ch1"
-            2 -> "ch2"
-            3 -> "ch3"
-            4 -> "ch4"
-            5 -> "ch5"
-            6 -> "ch6"
-            7 -> "ch7"
-            8 -> "ch8"
-            9 -> "ch9"
-            10 -> "ch10"
-            11 -> "ch11"
-            12 -> "ch12"
-            13 -> "ch13"
-            14 -> "ch14"
-            15 -> "ch15"
+            0 -> "acc_x"
+            1 -> "acc_y"
+            2 -> "acc_z"
+            3 -> "gyro_x"
+            4 -> "gyro_y"
+            5 -> "gyro_z"
             else -> ""
         }
     }
 
-    override fun doubles(channel: Int): DoubleBuffer {
+    override fun shorts(channel: Int): ShortBuffer {
         val result = outputData
             .asReadOnlyBuffer()
-            .asDoubleBuffer()
+            .asShortBuffer()
         result.position(channel*numSamples)
         result.limit((channel+1)*numSamples)
         return result

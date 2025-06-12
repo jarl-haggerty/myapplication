@@ -1,4 +1,4 @@
-package org.pesaran.myapplication.ui.theme
+package org.pesaran.sleeve.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
