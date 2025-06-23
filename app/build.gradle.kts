@@ -88,4 +88,5 @@ dependencies {
     implementation(libs.ktor.client.cio)
     implementation(libs.coil.compose)
     implementation(libs.coil.gif)
+    implementation(libs.commons.math3)
 }

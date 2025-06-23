@@ -24,6 +24,10 @@ class WaveNode : GraphNode {
     private val cosByteStream = ByteArrayOutputStream()
     private val cosDataStream = DataOutputStream(cosByteStream)
 
+    private var squareData = ByteBuffer.allocate(1)
+    private val squareByteStream = ByteArrayOutputStream()
+    private val squareDataStream = DataOutputStream(squareByteStream)
+
     var running = false
     private var lastTime = 0.seconds
     private var currentTime = 0.seconds
@@ -36,14 +40,21 @@ class WaveNode : GraphNode {
         currentTime = System.nanoTime().nanoseconds
         byteStream.reset()
         cosByteStream.reset()
+        squareByteStream.reset()
         while(lastTime < currentTime) {
-            dataStream.writeShort((sin(lastTime.inWholeMilliseconds/1000.0)*Short.MAX_VALUE).toInt())
-            cosDataStream.writeShort((cos(lastTime.inWholeMilliseconds/1000.0)*Short.MAX_VALUE).toInt())
+            dataStream.writeShort((sin(30*2*Math.PI*lastTime.inWholeMilliseconds/1000.0)*Short.MAX_VALUE).toInt())
+            cosDataStream.writeShort((cos(10*2*Math.PI*lastTime.inWholeMilliseconds/1000.0)*Short.MAX_VALUE).toInt())
+            if(lastTime.inWholeMilliseconds % 1000 < 500) {
+                squareDataStream.writeShort(0)
+            } else {
+                squareDataStream.writeShort(1)
+            }
             lastTime += 1.milliseconds
         }
         timestamp = lastTime - 1.milliseconds
         data = ByteBuffer.wrap(byteStream.toByteArray())
         cosData = ByteBuffer.wrap(cosByteStream.toByteArray())
+        squareData = ByteBuffer.wrap(squareByteStream.toByteArray())
         ready(this)
         Handler(Looper.getMainLooper()).postDelayed({publish()}, 16)
     }
@@ -68,7 +79,7 @@ class WaveNode : GraphNode {
 
     override fun dataType() = TimeSeriesNode.DataType.SHORT
 
-    override fun numChannels() = 2
+    override fun numChannels() = 3
 
     override fun sampleInterval(channel: Int) =  1.milliseconds
 
@@ -78,6 +89,7 @@ class WaveNode : GraphNode {
         return when(channel) {
             0 -> "sin"
             1 -> "cos"
+            2 -> "square"
             else -> ""
         }
     }
@@ -86,6 +98,7 @@ class WaveNode : GraphNode {
         return when(channel) {
             0 -> data.asReadOnlyBuffer().asShortBuffer()
             1 -> cosData.asReadOnlyBuffer().asShortBuffer()
+            2 -> squareData.asReadOnlyBuffer().asShortBuffer()
             else -> throw UnsupportedOperationException()
         }
     }

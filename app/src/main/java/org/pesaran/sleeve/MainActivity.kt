@@ -53,6 +53,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -81,6 +82,7 @@ import kotlin.time.Duration.Companion.seconds
 //import coil3.ImageDecoderDecoder
 //import coil3.GifDecoder
 import coil3.compose.rememberAsyncImagePainter
+import org.apache.commons.math3.util.FastMath.pow
 import kotlin.math.log10
 import kotlin.math.sqrt
 
@@ -97,6 +99,9 @@ enum class Sensor(i: Int) {
 class MainActivity : ComponentActivity() {
     val node = WaveNode()
     val intanNode = IntanRHDNode()
+    val intanBandPassNode = BandPassNode(20.0, 250.0, node)
+    val rectifierNode = RectifierNode(intanBandPassNode)
+    val lowPassNode = BandPassNode(0.0, 60.0, rectifierNode)
     val adcNode = ADCNode()
     val icmNode = ICM20948Node()
     private var error = mutableStateOf<String?>(null)
@@ -488,41 +493,51 @@ class MainActivity : ComponentActivity() {
             powerCount = 0.0
         }
 
-        val connection = intanNode.ready.connect {
-            if(!intanNode.hasAnalogData()) {
+        val samples = mutableListOf<ArrayList<Double>>()
+
+        val connection = lowPassNode.ready.connect {
+            if(!lowPassNode.hasAnalogData()) {
                 return@connect
             }
 
-            val data = intanNode.doubles(channel)
-            val sampleInterval = intanNode.sampleInterval(channel)
-            while(data.remaining() > 0) {
-                val sample = data.get()
-                window.add(sample)
-                sum += sample
-                while(sampleInterval*window.size >= windowSize) {
-                    sum -= window.first()
-                    window.removeFirst()
+            while(samples.size < lowPassNode.numChannels()) {
+                samples.add(ArrayList<Double>())
+            }
+            for(i in 0..<lowPassNode.numChannels()) {
+                val channelSamples = samples[i]
+                val newSamples = lowPassNode.doubles(i)
+                while(newSamples.hasRemaining()) {
+                    channelSamples.add(newSamples.get())
                 }
-                elapsed += sampleInterval
-                if (elapsed < windowSize) {
-                    continue
-                }
-
-                val mean = sum / window.size
-                val amplitude = sample - mean
-                powerSum += amplitude*amplitude
-                ++powerCount
-                calibrationStatus.value = "${powerSum/powerCount}"
             }
         }
+
+        val computeSnr = {
+            val cvs = samples.map {
+                val mean = it.average()
+                val variance = it.map { pow(it - mean, 2) }.sum() / mean
+                val std = sqrt(variance)
+                std/mean
+            }
+            val medians = samples.map {
+                val sorted = it.sorted()
+                sorted[sorted.size/2]
+            }
+            val ratios = medians.zip(cvs).map { it.first / it.second }
+            ratios.max()
+        }
         try {
-            clear()
-            channel = 6
+            samples.clear()
             prompt.value = R.drawable.rest
             delay(5.seconds)
-            restPower = sqrt(powerSum.toDouble() / powerCount)
+            val snr = computeSnr()
 
-            clear()
+            samples.clear()
+            prompt.value = R.drawable.calibration_1
+            delay(5.seconds)
+            val snr2 = computeSnr()
+
+            /*clear()
             channel = 6
             prompt.value = R.drawable.calibration_1
             delay(5.seconds)
@@ -534,7 +549,7 @@ class MainActivity : ComponentActivity() {
             }
             calibrationStatus.value = "Good SNR for channel ${channel+1}, $snr"
 
-            /*prompt.value = R.drawable.rest
+            prompt.value = R.drawable.rest
             delay(5.seconds)
             prompt.value = R.drawable.calibration_2
             delay(5.seconds)
@@ -599,6 +614,7 @@ class MainActivity : ComponentActivity() {
         storage.add("ICM", icmNode)
         storage.add("ADC", adcNode)
 
+        node.start()
         val toggle = {
             node.toggle()
             //if(node.running) {
@@ -617,7 +633,7 @@ class MainActivity : ComponentActivity() {
             var recording by remember { recording }
             var confirmClear by remember { confirmClearState }
             var expanded by remember { mutableStateOf(false) }
-            var selectPlot by remember { mutableStateOf("ICM") }
+            var selectPlot by remember { mutableStateOf("Band Pass") }
             var prompt by remember { promptState }
             var promptJob by remember {mutableStateOf<Job?>(null)}
 
@@ -699,6 +715,34 @@ class MainActivity : ComponentActivity() {
                                 onDismissRequest = { expanded = false }
                             ) {
                                 DropdownMenuItem(
+                                    text = { Text("Wave") },
+                                    onClick = {
+                                        expanded = false
+                                        selectPlot = "Wave"
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Band Pass") },
+                                    onClick = {
+                                        expanded = false
+                                        selectPlot = "Band Pass"
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Rectified") },
+                                    onClick = {
+                                        expanded = false
+                                        selectPlot = "Rectified"
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Low Pass") },
+                                    onClick = {
+                                        expanded = false
+                                        selectPlot = "Low Pass"
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("ICM") },
                                     onClick = {
                                         expanded = false
@@ -729,7 +773,15 @@ class MainActivity : ComponentActivity() {
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize())}
                         //} else {
-                            if(selectPlot == "ICM") {
+                            if(selectPlot == "Wave") {
+                                Graph(modifier = Modifier.fillMaxSize(), node)
+                            } else if(selectPlot == "Band Pass") {
+                                Graph(modifier = Modifier.fillMaxSize(), intanBandPassNode)
+                            } else if(selectPlot == "Rectified") {
+                                Graph(modifier = Modifier.fillMaxSize(), rectifierNode)
+                            } else if(selectPlot == "Low Pass") {
+                                Graph(modifier = Modifier.fillMaxSize(), lowPassNode)
+                            } else if(selectPlot == "ICM") {
                                 Graph(modifier = Modifier.fillMaxSize(), icmNode)
                             } else if(selectPlot == "Intan") {
                                 Graph(modifier = Modifier.fillMaxSize(), intanNode)
@@ -762,12 +814,13 @@ val COLORS = arrayOf(
 fun <T> Graph(modifier: Modifier = Modifier, node: T) where T : Node, T: TimeSeriesNode {
     var invalidate by remember { mutableIntStateOf(0) }
     val signals by remember { mutableStateOf<MutableList<SignalPlot>>(mutableListOf<SignalPlot>()) }
+    val textMeasurer = rememberTextMeasurer()
     LaunchedEffect(Unit) {
         val connection = node.ready.connect {
             if(node.hasAnalogData()) {
                 (0..<node.numChannels()).forEach {
                     while(signals.size <= it) {
-                        signals.add(SignalPlot())
+                        signals.add(SignalPlot(node.name(it)))
                     }
                     val plot = signals[it]
                     val interval = node.sampleInterval(it)
@@ -806,7 +859,7 @@ fun <T> Graph(modifier: Modifier = Modifier, node: T) where T : Node, T: TimeSer
         val pixelSlice = size.height/count
         drawRect(Color.Black, Offset(0F, 0F), Size(size.width, size.height))
         signals.forEachIndexed { i, it ->
-            it.draw(this, Rect(0F, i*pixelSlice, size.width, (i+1)*pixelSlice), COLORS[i % COLORS.size])
+            it.draw(this, textMeasurer, Rect(0F, i*pixelSlice, size.width, (i+1)*pixelSlice), COLORS[i % COLORS.size])
         }
     }
 }
