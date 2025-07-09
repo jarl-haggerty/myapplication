@@ -93,6 +93,7 @@ import org.apache.commons.math3.transform.DftNormalization
 import org.apache.commons.math3.transform.FastFourierTransformer
 import org.apache.commons.math3.transform.TransformType
 import org.apache.commons.math3.complex.Complex
+import kotlin.math.abs
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -563,11 +564,11 @@ class MainActivity : ComponentActivity() {
             val drawables = listOf(
                 R.drawable.calibration_1,
                 R.drawable.calibration_2,
-                //R.drawable.calibration_3,
-                //R.drawable.calibration_4,
-                //R.drawable.calibration_5,
-                //R.drawable.calibration_6,
-                //R.drawable.calibration_7,
+                R.drawable.calibration_3,
+                R.drawable.calibration_4,
+                R.drawable.calibration_5,
+                R.drawable.calibration_6,
+                R.drawable.calibration_7,
             )
 
             val rms = fun(it: MutableList<Double>, samplePeriod: Duration): Double {
@@ -583,24 +584,42 @@ class MainActivity : ComponentActivity() {
                 val nyquistFrequency = sampleFrequency/2
                 val start = (frequencyDomain.size/2 * (20.0/nyquistFrequency)).toInt()
                 val end = (frequencyDomain.size/2 * (250.0/nyquistFrequency)).toInt()
-                val N = 2*(end-start+1)
+                /*val N = 2*(end-start+1)
                 val positive = frequencyDomain.slice(start..end).fold(0.0) { acc, i ->
-                    acc + (i.real*i.real) + i.imaginary*i.imaginary
+                    acc + i.real*i.real + i.imaginary*i.imaginary
                 }
                 val total = frequencyDomain.slice((frequencyDomain.size-1-end)..(frequencyDomain.size-1-start)).fold(positive) { acc, i ->
                     acc + i.real*i.real + i.imaginary*i.imaginary
                 }
-                return sqrt(total/(N*N))
-                /*for (i in 0..<start) {
+                return sqrt(total/(N*N))*/
+                for (i in 0..<start) {
                     frequencyDomain[i] = Complex.ZERO
                     frequencyDomain[frequencyDomain.size-1-i] = Complex.ZERO
                 }
                 for (i in (end+1)..<(frequencyDomain.size-1-end)) {
                     frequencyDomain[i] = Complex.ZERO
                 }
-                return fft.transform(frequencyDomain, TransformType.INVERSE).map {
-                    it.real
-                }.toDoubleArray()*/
+                val rectified = fft.transform(frequencyDomain, TransformType.INVERSE).map {
+                    abs(it.real)
+                }.toDoubleArray()
+
+                val frequencyDomain2 = fft.transform(rectified, TransformType.FORWARD)
+                val end2 = (frequencyDomain2.size/2 * (60.0/nyquistFrequency)).toInt()
+                for (i in (end2+1)..<(frequencyDomain2.size-1-end2)) {
+                    frequencyDomain2[i] = Complex.ZERO
+                    frequencyDomain2[frequencyDomain2.size-1-i] = Complex.ZERO
+                }
+
+                val N = frequencyDomain2.size - 2*(end2+1)
+                val positive = frequencyDomain2.slice(0..end2).fold(0.0) { acc, i ->
+                    acc + i.real*i.real + i.imaginary*i.imaginary
+                }
+                val total = frequencyDomain2.slice((frequencyDomain2.size-1-end2)..<frequencyDomain2.size).fold(positive) { acc, i ->
+                    acc + i.real*i.real + i.imaginary*i.imaginary
+                }
+                //application manager skips square root
+                return total/(N*N)
+                //return sqrt(total/(N*N))
             }
 
             /*val rms = { it: DoubleArray ->
@@ -627,9 +646,10 @@ class MainActivity : ComponentActivity() {
                 val activeRms = samples.zip(sampleIntervals).map { rms(it.first, it.second) }
                 println("active " + (System.nanoTime() - start2)/1e9 + " " + activeRms.toString())
 
-                activeRms.zip(restRms).map {
+                val temp = activeRms.zip(restRms).map {
                     10*log10(it.first / it.second)
                 }
+                temp + listOf(temp.max())
             }
             /*clear()
             channel = 6
@@ -868,20 +888,22 @@ class MainActivity : ComponentActivity() {
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize())}
                         if(snr.isNotEmpty()) {
-                            for (i in 0..<snr[0].size) {
+                            /*for (i in 0..<snr[0].size) {
                                 Row() {
                                     snr.forEach {
                                         Text(String.format("%.2f", it[i]) + " ")
                                     }
                                 }
-                            }
-                            /*snr.forEach {
-                                Row() {
-                                    it.forEach {
-                                        Text(String.format("%.2f", it) + " ")
+                            }*/
+                            Row() {
+                                snr.forEach {
+                                    Column() {
+                                        it.forEach {
+                                            Text(String.format("%.2f", it) + " ")
+                                        }
                                     }
                                 }
-                            }*/
+                            }
                             Button(onClick = {snr = listOf<List<Double>>()}) { Text("Clear SNR")}
                         }
                         //} else {
