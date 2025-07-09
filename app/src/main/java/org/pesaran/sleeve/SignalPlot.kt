@@ -57,16 +57,6 @@ class SignalPlot(val name: String) {
         val scaleX = bounds.width / 10e9
         val scaleY = bounds.height/(top - bottom)
         scope.apply {
-            val titleMeasure = textMeasurer.measure(name)
-            drawText(textMeasurer, name, bounds.topRight - Offset(titleMeasure.size.width.toFloat(), 0f), TextStyle(color=Color.White))
-
-            drawText(textMeasurer, top.toString(), bounds.topLeft, TextStyle(color=Color.White))
-            val text = bottom.toString()
-            val measured = textMeasurer.measure(text)
-            drawText(textMeasurer, text, bounds.bottomLeft - Offset(0F,
-                measured.size.height.toFloat()
-            ), TextStyle(color=Color.White))
-
             translate (bounds.left, bounds.top + bounds.height*.95f) {
                 scale(scaleX.toFloat(), -scaleY.toFloat()*.9f, Offset(0F, 0F)) {
                     translate(10.0E9F - time, -bottom.toFloat()) {
@@ -77,6 +67,16 @@ class SignalPlot(val name: String) {
                     }
                 }
             }
+
+            val titleMeasure = textMeasurer.measure(name)
+            drawText(textMeasurer, name, bounds.topRight - Offset(titleMeasure.size.width.toFloat(), 0f), TextStyle(color=Color.White))
+
+            drawText(textMeasurer, top.toString(), bounds.topLeft, TextStyle(color=Color.White))
+            val text = bottom.toString()
+            val measured = textMeasurer.measure(text)
+            drawText(textMeasurer, text, bounds.bottomLeft - Offset(0F,
+                measured.size.height.toFloat()
+            ), TextStyle(color=Color.White))
         }
     }
 }

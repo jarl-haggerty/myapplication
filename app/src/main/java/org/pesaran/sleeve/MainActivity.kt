@@ -83,8 +83,16 @@ import kotlin.time.Duration.Companion.seconds
 //import coil3.GifDecoder
 import coil3.compose.rememberAsyncImagePainter
 import org.apache.commons.math3.util.FastMath.pow
+import java.lang.Math.pow
 import kotlin.math.log10
+import kotlin.math.log2
+import kotlin.math.pow
 import kotlin.math.sqrt
+import kotlin.time.Duration
+import org.apache.commons.math3.transform.DftNormalization
+import org.apache.commons.math3.transform.FastFourierTransformer
+import org.apache.commons.math3.transform.TransformType
+import org.apache.commons.math3.complex.Complex
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -99,9 +107,11 @@ enum class Sensor(i: Int) {
 class MainActivity : ComponentActivity() {
     val node = WaveNode()
     val intanNode = IntanRHDNode()
-    val intanBandPassNode = BandPassNode(20.0, 250.0, node)
-    val rectifierNode = RectifierNode(intanBandPassNode)
-    val lowPassNode = BandPassNode(0.0, 60.0, rectifierNode)
+    //val intanBandPassNode = node
+    val fft = FastFourierTransformer(DftNormalization.STANDARD)
+    //val intanBandPassNode = BandPassNode(20.0, 250.0, intanNode)
+    //val rectifierNode = RectifierNode(intanBandPassNode)
+    //val lowPassNode = BandPassNode(0.0, 60.0, rectifierNode)
     val adcNode = ADCNode()
     val icmNode = ICM20948Node()
     private var error = mutableStateOf<String?>(null)
@@ -199,7 +209,7 @@ class MainActivity : ComponentActivity() {
                 @SuppressLint("MissingPermission")
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
                     super.onScanResult(callbackType, result)
-                    println("${result.device.name} ${result.device.address} ${callbackType}")
+                    //println("${result.device.name} ${result.device.address} ${callbackType}")
                     if((result.device.name == "NORA_INTAN_RHD_ICM") || (result.device.address == deviceAddress)) {
                         preferences.edit().putString("device-address", result.device.address).apply()
                         bluetoothAdapter.bluetoothLeScanner.stopScan(this)
@@ -469,9 +479,11 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent.createChooser(shareIntent, null))
     }
 
+    var snr = mutableStateOf(listOf<List<Double>>())
+
     suspend fun calibration(prompt: MutableState<Int?>) {
         calibrationStatus.value = "Calibrating"
-        var channel = 0
+        /*var channel = 0
         var elapsed = 0.seconds
         var window = LinkedList<Double>()
         var windowSize = 100.milliseconds
@@ -491,28 +503,49 @@ class MainActivity : ComponentActivity() {
             count = 0L
             powerSum = 0.0
             powerCount = 0.0
-        }
+        }*/
 
-        val samples = mutableListOf<ArrayList<Double>>()
+        //snr.clear()
 
-        val connection = lowPassNode.ready.connect {
-            if(!lowPassNode.hasAnalogData()) {
+        val samples = mutableListOf<MutableList<Double>>()
+        val sampleIntervals = mutableListOf<Duration>()
+        val node = this.intanNode
+
+        val connection = node.ready.connect {
+            if(!node.hasAnalogData()) {
                 return@connect
             }
 
-            while(samples.size < lowPassNode.numChannels()) {
-                samples.add(ArrayList<Double>())
+            while(samples.size < node.numChannels()) {
+                sampleIntervals.add(node.sampleInterval(samples.size))
+                samples.add(mutableListOf<Double>())
+                //squareSums.add(0.0)
+                //counts.add(0)
             }
-            for(i in 0..<lowPassNode.numChannels()) {
-                val channelSamples = samples[i]
-                val newSamples = lowPassNode.doubles(i)
-                while(newSamples.hasRemaining()) {
-                    channelSamples.add(newSamples.get())
+            for(i in 0..<node.numChannels()) {
+                //var newSquareSum = 0.0
+                if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
+                    val newSamples = node.doubles(i)
+                    //counts[i] += newSamples.remaining()
+                    val channelSamples = samples[i]
+                    while(newSamples.hasRemaining()) {
+                        channelSamples.add(newSamples.get())
+                        //newSquareSum += newSamples.get().pow(2.0)
+                    }
+                } else {
+                    val newSamples = node.shorts(i)
+                    //counts[i] += newSamples.remaining()
+                    val channelSamples = samples[i]
+                    while(newSamples.hasRemaining()) {
+                        channelSamples.add(newSamples.get().toDouble())
+                        //newSquareSum += newSamples.get().pow(2.0)
+                    }
                 }
+                //squareSums[i] += newSquareSum
             }
         }
 
-        val computeSnr = {
+        /*val computeSnr = {
             val cvs = samples.map {
                 val mean = it.average()
                 val variance = it.map { pow(it - mean, 2) }.sum() / mean
@@ -525,18 +558,79 @@ class MainActivity : ComponentActivity() {
             }
             val ratios = medians.zip(cvs).map { it.first / it.second }
             ratios.max()
-        }
+        }*/
         try {
-            samples.clear()
-            prompt.value = R.drawable.rest
-            delay(5.seconds)
-            val snr = computeSnr()
+            val drawables = listOf(
+                R.drawable.calibration_1,
+                R.drawable.calibration_2,
+                //R.drawable.calibration_3,
+                //R.drawable.calibration_4,
+                //R.drawable.calibration_5,
+                //R.drawable.calibration_6,
+                //R.drawable.calibration_7,
+            )
 
-            samples.clear()
-            prompt.value = R.drawable.calibration_1
-            delay(5.seconds)
-            val snr2 = computeSnr()
+            val rms = fun(it: MutableList<Double>, samplePeriod: Duration): Double {
+                var pow2 = 1
+                while(2*pow2 <= it.size) {
+                    pow2 *= 2
+                }
+                //val lower2 = log2(it.size.toDouble())
+                //val tail = pow(2.0, lower2).toInt()
+                val timeDomain = it.subList(it.size - pow2, it.size).toDoubleArray()
+                val frequencyDomain = fft.transform(timeDomain, TransformType.FORWARD)
+                val sampleFrequency = 1e9/samplePeriod.inWholeNanoseconds
+                val nyquistFrequency = sampleFrequency/2
+                val start = (frequencyDomain.size/2 * (20.0/nyquistFrequency)).toInt()
+                val end = (frequencyDomain.size/2 * (250.0/nyquistFrequency)).toInt()
+                val N = 2*(end-start+1)
+                val positive = frequencyDomain.slice(start..end).fold(0.0) { acc, i ->
+                    acc + (i.real*i.real) + i.imaginary*i.imaginary
+                }
+                val total = frequencyDomain.slice((frequencyDomain.size-1-end)..(frequencyDomain.size-1-start)).fold(positive) { acc, i ->
+                    acc + i.real*i.real + i.imaginary*i.imaginary
+                }
+                return sqrt(total/(N*N))
+                /*for (i in 0..<start) {
+                    frequencyDomain[i] = Complex.ZERO
+                    frequencyDomain[frequencyDomain.size-1-i] = Complex.ZERO
+                }
+                for (i in (end+1)..<(frequencyDomain.size-1-end)) {
+                    frequencyDomain[i] = Complex.ZERO
+                }
+                return fft.transform(frequencyDomain, TransformType.INVERSE).map {
+                    it.real
+                }.toDoubleArray()*/
+            }
 
+            /*val rms = { it: DoubleArray ->
+                val squareSum = it.fold(0.0) { acc, i ->
+                    acc + i*i
+                }
+                sqrt(squareSum/it.size)
+            }*/
+
+            snr.value = drawables.map {
+                samples.clear()
+                sampleIntervals.clear()
+                prompt.value = R.drawable.rest
+                delay(5.seconds)
+                val start = System.nanoTime()
+                val restRms = samples.zip(sampleIntervals).map { rms(it.first, it.second) }
+                println("rest " + (System.nanoTime() - start)/1e9 + " " + restRms.toString())
+
+                samples.clear()
+                sampleIntervals.clear()
+                prompt.value = it
+                delay(5.seconds)
+                val start2 = System.nanoTime()
+                val activeRms = samples.zip(sampleIntervals).map { rms(it.first, it.second) }
+                println("active " + (System.nanoTime() - start2)/1e9 + " " + activeRms.toString())
+
+                activeRms.zip(restRms).map {
+                    10*log10(it.first / it.second)
+                }
+            }
             /*clear()
             channel = 6
             prompt.value = R.drawable.calibration_1
@@ -633,9 +727,10 @@ class MainActivity : ComponentActivity() {
             var recording by remember { recording }
             var confirmClear by remember { confirmClearState }
             var expanded by remember { mutableStateOf(false) }
-            var selectPlot by remember { mutableStateOf("Band Pass") }
+            var selectPlot by remember { mutableStateOf("Intan") }
             var prompt by remember { promptState }
             var promptJob by remember {mutableStateOf<Job?>(null)}
+            var snr by remember { snr }
 
             /*val imageLoader = ImageLoader.Builder(applicationContext)
                 .components {
@@ -721,14 +816,14 @@ class MainActivity : ComponentActivity() {
                                         selectPlot = "Wave"
                                     }
                                 )
-                                DropdownMenuItem(
+                                /*DropdownMenuItem(
                                     text = { Text("Band Pass") },
                                     onClick = {
                                         expanded = false
                                         selectPlot = "Band Pass"
                                     }
-                                )
-                                DropdownMenuItem(
+                                )*/
+                                /*DropdownMenuItem(
                                     text = { Text("Rectified") },
                                     onClick = {
                                         expanded = false
@@ -741,7 +836,7 @@ class MainActivity : ComponentActivity() {
                                         expanded = false
                                         selectPlot = "Low Pass"
                                     }
-                                )
+                                )*/
                                 DropdownMenuItem(
                                     text = { Text("ICM") },
                                     onClick = {
@@ -772,15 +867,32 @@ class MainActivity : ComponentActivity() {
                                 , "",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize())}
+                        if(snr.isNotEmpty()) {
+                            for (i in 0..<snr[0].size) {
+                                Row() {
+                                    snr.forEach {
+                                        Text(String.format("%.2f", it[i]) + " ")
+                                    }
+                                }
+                            }
+                            /*snr.forEach {
+                                Row() {
+                                    it.forEach {
+                                        Text(String.format("%.2f", it) + " ")
+                                    }
+                                }
+                            }*/
+                            Button(onClick = {snr = listOf<List<Double>>()}) { Text("Clear SNR")}
+                        }
                         //} else {
                             if(selectPlot == "Wave") {
                                 Graph(modifier = Modifier.fillMaxSize(), node)
-                            } else if(selectPlot == "Band Pass") {
-                                Graph(modifier = Modifier.fillMaxSize(), intanBandPassNode)
-                            } else if(selectPlot == "Rectified") {
-                                Graph(modifier = Modifier.fillMaxSize(), rectifierNode)
-                            } else if(selectPlot == "Low Pass") {
-                                Graph(modifier = Modifier.fillMaxSize(), lowPassNode)
+                            //} else if(selectPlot == "Band Pass") {
+                            //    Graph(modifier = Modifier.fillMaxSize(), intanBandPassNode)
+                            //} else if(selectPlot == "Rectified") {
+                            //    Graph(modifier = Modifier.fillMaxSize(), rectifierNode)
+                            //} else if(selectPlot == "Low Pass") {
+                             //   Graph(modifier = Modifier.fillMaxSize(), lowPassNode)
                             } else if(selectPlot == "ICM") {
                                 Graph(modifier = Modifier.fillMaxSize(), icmNode)
                             } else if(selectPlot == "Intan") {
