@@ -19,6 +19,10 @@ class ICM20948Node : IICM20948Node {
     private val _numChannels = 6
     private var numSamples = 0
 
+    fun reset() {
+        //nextFirstPoint = 0
+    }
+
     fun process(block: Block) {
         val data = block.data
         data.order(ByteOrder.BIG_ENDIAN)

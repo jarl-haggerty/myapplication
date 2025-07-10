@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.DoubleBuffer
 import kotlin.experimental.and
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
@@ -19,6 +20,14 @@ class IntanRHDNode : IIntanRHDNode {
     private var timestamp = 0.seconds
     private val _numChannels = 16
     private var numSamples = 0
+    private var nextFirstPoint = 0
+    private var lostSamples = 0.0
+    private var samplesInSecond = 0
+    private var publishLoss = false
+
+    fun reset() {
+        nextFirstPoint = 0
+    }
 
     fun process(block: Block) {
         val data = block.data
@@ -35,6 +44,20 @@ class IntanRHDNode : IIntanRHDNode {
         }
 
         numSamples = numPoints / _numChannels
+        var missing = block.firstPointIdx - nextFirstPoint
+        while(missing < 0) {
+            missing += 1 shl 16
+        }
+        lostSamples += missing
+        nextFirstPoint = block.firstPointIdx + numSamples
+
+        samplesInSecond += numSamples
+        if(samplesInSecond > 1000) {
+            samplesInSecond -= 1000
+            publishLoss = true
+        } else {
+            publishLoss = false
+        }
 
         var currentChannel = 0
         var currentSample = 0
@@ -65,9 +88,14 @@ class IntanRHDNode : IIntanRHDNode {
 
     override fun dataType() = TimeSeriesNode.DataType.DOUBLE
 
-    override fun numChannels() = _numChannels
+    override fun numChannels() = _numChannels+1
 
-    override fun sampleInterval(channel: Int) =  1.milliseconds
+    override fun sampleInterval(channel: Int): Duration {
+        return when (channel) {
+            16 -> 1.seconds
+            else -> 1.milliseconds
+        }
+    }
 
     override fun time() = timestamp
 
@@ -89,11 +117,19 @@ class IntanRHDNode : IIntanRHDNode {
             13 -> "ch13"
             14 -> "ch14"
             15 -> "ch15"
+            16 -> "loss"
             else -> ""
         }
     }
 
     override fun doubles(channel: Int): DoubleBuffer {
+        if(channel == 16) {
+            if(publishLoss) {
+                return DoubleBuffer.wrap(doubleArrayOf(lostSamples))
+            } else {
+                return DoubleBuffer.allocate(0)
+            }
+        }
         val result = outputData
             .asReadOnlyBuffer()
             .asDoubleBuffer()

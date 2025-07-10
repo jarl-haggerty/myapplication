@@ -268,6 +268,9 @@ class MainActivity : ComponentActivity() {
                     println("onServicesDiscovered received: $status")
                     scope.launch {
                         if(status == BluetoothGatt.GATT_SUCCESS) {
+                            icmNode.reset()
+                            intanNode.reset()
+                            adcNode.reset()
                             serviceChannel.send(Status(true, ""))
                         } else {
                             serviceChannel.send(Status(true, "Service Discovery Failed"))
@@ -500,8 +503,8 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent.createChooser(shareIntent, null))
     }
 
-    var snr = mutableStateOf(listOf<List<String>>(listOf("", "ch0", "ch1", "ch2"), listOf("1", "1.0", "10.0", "100.0"), listOf("2", "1000.0", "10000.0", "100000.0")))
-    //var snr = mutableStateOf(listOf<List<String>>())
+    //var snr = mutableStateOf(listOf<List<String>>(listOf("", "ch0", "ch1", "ch2"), listOf("1", "1.0", "10.0", "100.0"), listOf("2", "1000.0", "10000.0", "100000.0")))
+    var snr = mutableStateOf(listOf<List<String>>())
 
     @Serializable
     data class MyModel(val bias: DoubleArray, val coef: Array<DoubleArray>) {
@@ -585,13 +588,16 @@ class MainActivity : ComponentActivity() {
             }
 
             while(samples.size < node.numChannels()) {
+                if(node.name(samples.size) == "loss") {
+                    break
+                }
                 sampleIntervals.add(node.sampleInterval(samples.size))
                 channelNames.add(node.name(samples.size))
                 samples.add(mutableListOf<Double>())
                 //squareSums.add(0.0)
                 //counts.add(0)
             }
-            for(i in 0..<node.numChannels()) {
+            for(i in 0..<samples.size) {
                 //var newSquareSum = 0.0
                 if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
                     val newSamples = node.doubles(i)
@@ -763,13 +769,16 @@ class MainActivity : ComponentActivity() {
             }
 
             while(samples.size < node.numChannels()) {
+                if(node.name(samples.size) == "loss") {
+                    break
+                }
                 sampleIntervals.add(node.sampleInterval(samples.size))
                 channelNames.add(node.name(samples.size))
                 samples.add(mutableListOf<Double>())
                 //squareSums.add(0.0)
                 //counts.add(0)
             }
-            for(i in 0..<node.numChannels()) {
+            for(i in 0..<samples.size) {
                 //var newSquareSum = 0.0
                 if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
                     val newSamples = node.doubles(i)
@@ -1314,7 +1323,7 @@ fun <T> Graph(modifier: Modifier = Modifier, node: T) where T : Node, T: TimeSer
     Canvas(modifier=modifier.height((LocalConfiguration.current.screenHeightDp).dp)) {
         invalidate.apply {}
         val count = signals.size
-        val pixelSlice = size.height/count
+        val pixelSlice = (size.height-100)/count
         drawRect(Color.Black, Offset(0F, 0F), Size(size.width, size.height))
         signals.forEachIndexed { i, it ->
             it.draw(this, textMeasurer, Rect(0F, i*pixelSlice, size.width, (i+1)*pixelSlice), COLORS[i % COLORS.size])

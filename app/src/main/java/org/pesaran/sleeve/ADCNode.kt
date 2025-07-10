@@ -19,6 +19,10 @@ class ADCNode : IADCNode {
     private val _numChannels = 1
     private var numSamples = 0
 
+    fun reset() {
+        //nextFirstPoint = 0
+    }
+
     fun process(block: Block) {
         val data = block.data
         data.order(ByteOrder.BIG_ENDIAN)
