@@ -5,6 +5,8 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("com.google.protobuf") version "0.9.4"
+    //kotlin("jvm") version "2.2.0"
+    kotlin("plugin.serialization") version libs.versions.kotlin
 }
 
 android {
@@ -89,4 +91,5 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.gif)
     implementation(libs.commons.math3)
+    implementation(libs.kotlinx.serialization.json)
 }

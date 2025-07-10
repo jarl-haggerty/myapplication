@@ -21,15 +21,26 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -51,7 +62,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview
@@ -94,6 +107,13 @@ import org.apache.commons.math3.transform.FastFourierTransformer
 import org.apache.commons.math3.transform.TransformType
 import org.apache.commons.math3.complex.Complex
 import kotlin.math.abs
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.core.content.edit
+import kotlinx.serialization.*
+import kotlinx.serialization.json.Json
+import java.nio.charset.StandardCharsets
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -480,7 +500,231 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent.createChooser(shareIntent, null))
     }
 
-    var snr = mutableStateOf(listOf<List<Double>>())
+    var snr = mutableStateOf(listOf<List<String>>(listOf("", "ch0", "ch1", "ch2"), listOf("1", "1.0", "10.0", "100.0"), listOf("2", "1000.0", "10000.0", "100000.0")))
+    //var snr = mutableStateOf(listOf<List<String>>())
+
+    @Serializable
+    data class MyModel(val bias: DoubleArray, val coef: Array<DoubleArray>) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (javaClass != other?.javaClass) return false
+
+            other as MyModel
+
+            if (!bias.contentEquals(other.bias)) return false
+            if (!coef.contentDeepEquals(other.coef)) return false
+
+            return true
+        }
+
+        override fun hashCode(): Int {
+            var result = bias.contentHashCode()
+            result = 31 * result + coef.contentDeepHashCode()
+            return result
+        }
+    }
+
+    var model: MyModel? = null
+
+    val getModelLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) {
+        if(it == null) {
+            return@registerForActivityResult
+        }
+        val bytes = applicationContext.contentResolver.openInputStream(it)!!.readAllBytes()
+        val text = String(bytes, StandardCharsets.UTF_8)
+
+        model = Json.decodeFromString(MyModel.serializer(), text)
+
+        val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        preferences.edit(commit = true) {
+            putString("model", text)
+        }
+    }
+
+    fun importModel() {
+        getModelLauncher.launch(arrayOf("application/json"))
+    }
+
+    val dataNode = intanNode
+
+    suspend fun testModel(prompt: MutableState<Int?>) {
+        if(model == null) {
+            notice.value = "No Model loaded"
+            return
+        }
+        val model = this.model!!
+        if(model.bias.isEmpty()) {
+            notice.value = "No biases in model"
+            return
+        }
+        if(model.coef.isEmpty()) {
+            notice.value = "No coefficients in model"
+            return
+        }
+        if(model.bias.size != model.coef.size) {
+            notice.value = "Biases don't match coefficients in model"
+            return
+        }
+        model.coef.forEach {
+            if(it.isEmpty()) {
+                notice.value = "Coefficient list in model is empty"
+                return@testModel
+            }
+        }
+
+        //calibrationStatus.value = "Calibrating"
+
+        val samples = mutableListOf<MutableList<Double>>()
+        val sampleIntervals = mutableListOf<Duration>()
+        val channelNames = mutableListOf<String>()
+        val node = dataNode
+
+        val connection = node.ready.connect {
+            if(!node.hasAnalogData()) {
+                return@connect
+            }
+
+            while(samples.size < node.numChannels()) {
+                sampleIntervals.add(node.sampleInterval(samples.size))
+                channelNames.add(node.name(samples.size))
+                samples.add(mutableListOf<Double>())
+                //squareSums.add(0.0)
+                //counts.add(0)
+            }
+            for(i in 0..<node.numChannels()) {
+                //var newSquareSum = 0.0
+                if(node.dataType() == TimeSeriesNode.DataType.DOUBLE) {
+                    val newSamples = node.doubles(i)
+                    //counts[i] += newSamples.remaining()
+                    val channelSamples = samples[i]
+                    while(newSamples.hasRemaining()) {
+                        channelSamples.add(newSamples.get())
+                        //newSquareSum += newSamples.get().pow(2.0)
+                    }
+                } else {
+                    val newSamples = node.shorts(i)
+                    //counts[i] += newSamples.remaining()
+                    val channelSamples = samples[i]
+                    while(newSamples.hasRemaining()) {
+                        channelSamples.add(newSamples.get().toDouble())
+                        //newSquareSum += newSamples.get().pow(2.0)
+                    }
+                }
+                //squareSums[i] += newSquareSum
+            }
+        }
+
+        val filter = fun(it: MutableList<Double>, samplePeriod: Duration): DoubleArray {
+            var pow2 = 1
+            while(2*pow2 <= it.size) {
+                pow2 *= 2
+            }
+            //val lower2 = log2(it.size.toDouble())
+            //val tail = pow(2.0, lower2).toInt()
+            val timeDomain = it.subList(it.size - pow2, it.size).toDoubleArray()
+            val frequencyDomain = fft.transform(timeDomain, TransformType.FORWARD)
+            val sampleFrequency = 1e9/samplePeriod.inWholeNanoseconds
+            val nyquistFrequency = sampleFrequency/2
+            val start = (frequencyDomain.size/2 * (50.0/nyquistFrequency)).toInt()
+            val end = (frequencyDomain.size/2 * (450.0/nyquistFrequency)).toInt()
+            /*val N = 2*(end-start+1)
+            val positive = frequencyDomain.slice(start..end).fold(0.0) { acc, i ->
+                acc + i.real*i.real + i.imaginary*i.imaginary
+            }
+            val total = frequencyDomain.slice((frequencyDomain.size-1-end)..(frequencyDomain.size-1-start)).fold(positive) { acc, i ->
+                acc + i.real*i.real + i.imaginary*i.imaginary
+            }
+            return sqrt(total/(N*N))*/
+            for (i in 0..<start) {
+                frequencyDomain[i] = Complex.ZERO
+                frequencyDomain[frequencyDomain.size-1-i] = Complex.ZERO
+            }
+            for (i in (end+1)..<(frequencyDomain.size-1-end)) {
+                frequencyDomain[i] = Complex.ZERO
+            }
+            return fft.transform(frequencyDomain, TransformType.INVERSE).map {
+                it.real
+            }.toDoubleArray()
+        }
+
+        val scale = {it: List<Double> ->
+            val mean = it.sum()/it.size
+            val std = sqrt(it.sumOf { pow(it - mean, 2) } / it.size)
+            it.map { (it - mean)/std }
+        }
+
+        val threshold = .001
+        val drawables = listOf(
+            R.drawable.calibration_1,
+            R.drawable.calibration_2,
+            R.drawable.calibration_3,
+            R.drawable.calibration_4,
+            R.drawable.calibration_5,
+            R.drawable.calibration_6,
+            R.drawable.calibration_7,
+        )
+
+        try {
+            while(true) {
+                samples.clear()
+                sampleIntervals.clear()
+                channelNames.clear()
+                delay(1.seconds)
+                if(samples.size < 12) {
+                    continue
+                }
+                val relevant = samples.slice(4..11)
+                val filtered = relevant.zip(sampleIntervals).map {filter(it.first, it.second)}
+                val features = filtered.map {
+                    val middle = it.slice(it.size/4..3*it.size/4)
+                    val scaled = scale(middle)
+
+                    //The mean, rms and variance of a series scaled to mean=0 and std=1 is just 0, 1, 1.
+                    val mean = 0.0//scaled.sum() / scaled.size
+                    val rms = 1.0//sqrt(scaled.sumOf {it*it} / scaled.size)
+                    val variance = 1.0//scaled.sumOf { pow(it-mean,2) } / scaled.size
+
+                    val meanAbs = scaled.sumOf{abs(it)}
+
+                    val diff1 = scaled.slice(1..<scaled.size-1).zip(scaled.slice(0..<scaled.size-2)).map{it.first-it.second}
+                    val diff2 = scaled.slice(1..<scaled.size-1).zip(scaled.slice(2..<scaled.size)).map{it.first-it.second}
+                    val ssc = diff1.zip(diff2).sumOf {
+                        if(it.first*it.second >= threshold) {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+
+                    val lag = scaled.slice(0..<scaled.size-1)
+                    val lead = scaled.slice(1..<scaled.size)
+                    val zc = lag.zip(lead).sumOf {
+                        if(((it.first > 0) xor (it.second > 0)) and (abs(it.first - it.second) >= threshold)) {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+
+                    val wl = lag.zip(lead).sumOf {
+                        abs(it.first - it.second)
+                    }
+
+                    listOf(rms, variance, meanAbs, ssc, zc, wl)
+                }.flatten()
+
+                val scores = model.bias.zip(model.coef).map {
+                    it.first + it.second.zip(features).sumOf {it.first*it.second}
+                }
+                val gesture = (0..<scores.size).maxBy { scores[it] }
+                prompt.value = drawables[gesture % drawables.size]
+                println("MODEL $gesture")
+            }
+        } finally {
+            prompt.value = null
+            connection.disconnect()
+        }
+    }
 
     suspend fun calibration(prompt: MutableState<Int?>) {
         calibrationStatus.value = "Calibrating"
@@ -510,7 +754,8 @@ class MainActivity : ComponentActivity() {
 
         val samples = mutableListOf<MutableList<Double>>()
         val sampleIntervals = mutableListOf<Duration>()
-        val node = this.intanNode
+        val channelNames = mutableListOf<String>()
+        val node = dataNode
 
         val connection = node.ready.connect {
             if(!node.hasAnalogData()) {
@@ -519,6 +764,7 @@ class MainActivity : ComponentActivity() {
 
             while(samples.size < node.numChannels()) {
                 sampleIntervals.add(node.sampleInterval(samples.size))
+                channelNames.add(node.name(samples.size))
                 samples.add(mutableListOf<Double>())
                 //squareSums.add(0.0)
                 //counts.add(0)
@@ -568,7 +814,16 @@ class MainActivity : ComponentActivity() {
                 R.drawable.calibration_4,
                 R.drawable.calibration_5,
                 R.drawable.calibration_6,
-                R.drawable.calibration_7,
+                R.drawable.calibration_7
+            )
+            val gestureNames = listOf(
+                "g1",
+                "g2",
+                "g3",
+                "g4",
+                "g5",
+                "g6",
+                "g7"
             )
 
             val rms = fun(it: MutableList<Double>, samplePeriod: Duration): Double {
@@ -629,9 +884,10 @@ class MainActivity : ComponentActivity() {
                 sqrt(squareSum/it.size)
             }*/
 
-            snr.value = drawables.map {
+            val temp = drawables.zip(gestureNames).map {
                 samples.clear()
                 sampleIntervals.clear()
+                channelNames.clear()
                 prompt.value = R.drawable.rest
                 delay(5.seconds)
                 val start = System.nanoTime()
@@ -640,7 +896,8 @@ class MainActivity : ComponentActivity() {
 
                 samples.clear()
                 sampleIntervals.clear()
-                prompt.value = it
+                channelNames.clear()
+                prompt.value = it.first
                 delay(5.seconds)
                 val start2 = System.nanoTime()
                 val activeRms = samples.zip(sampleIntervals).map { rms(it.first, it.second) }
@@ -649,8 +906,9 @@ class MainActivity : ComponentActivity() {
                 val temp = activeRms.zip(restRms).map {
                     10*log10(it.first / it.second)
                 }
-                temp + listOf(temp.max())
+                listOf(it.second) + temp.map {String.format("%.4f", it)} + listOf(String.format("%.4f", temp.max()))
             }
+            snr.value = listOf(listOf("") + channelNames + listOf("max")) + temp
             /*clear()
             channel = 6
             prompt.value = R.drawable.calibration_1
@@ -693,6 +951,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    val notice = mutableStateOf("")
+
     @OptIn(ExperimentalMaterial3Api::class)
     @SuppressLint("ApplySharedPref")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -717,12 +977,19 @@ class MainActivity : ComponentActivity() {
         scope.launch {
             loop()
         }
+        val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+
+        val modelText = preferences.getString("model", "")!!
+        if(!modelText.isEmpty()) {
+            model = Json.decodeFromString(MyModel.serializer(), modelText)
+        }
 
         var value = mutableIntStateOf(0)
         var recording = mutableStateOf(false)
         var confirmClearState = mutableStateOf(false)
         val promptState = mutableStateOf<Int?>(null)
         val storage = Storage(this)
+        val recordSeconds = mutableStateOf(preferences.getInt("record-seconds", 0).seconds)
         //storage.add("Wave", node)
         storage.add("Intan", intanNode)
         storage.add("ICM", icmNode)
@@ -738,6 +1005,19 @@ class MainActivity : ComponentActivity() {
             //}
         }
 
+        scope.launch {
+            while(true) {
+                delay(1.seconds)
+                if(recording.value) {
+                    val seconds = preferences.getInt("record-seconds", 0)
+                    preferences.edit(commit = true) {
+                        putInt("record-seconds", seconds + 1)
+                    }
+                    recordSeconds.value = (seconds+1).seconds
+                }
+            }
+        }
+
         enableEdgeToEdge()
         setContent {
             var count by remember { value }
@@ -750,7 +1030,10 @@ class MainActivity : ComponentActivity() {
             var selectPlot by remember { mutableStateOf("Intan") }
             var prompt by remember { promptState }
             var promptJob by remember {mutableStateOf<Job?>(null)}
+            var modelJob by remember {mutableStateOf<Job?>(null)}
             var snr by remember { snr }
+            var recordSeconds by remember { recordSeconds }
+            var notice by remember {notice}
 
             /*val imageLoader = ImageLoader.Builder(applicationContext)
                 .components {
@@ -764,26 +1047,26 @@ class MainActivity : ComponentActivity() {
 
             SleeveTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        /*if(error != null) {
-                            Text(error!!, modifier = Modifier.padding(innerPadding), color=Color.Red)
-                        } else if (status != null) {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        if(error != null) {
+                            item{Text(error!!, modifier = Modifier.padding(innerPadding), color=Color.Red)}
+                        } /*else if (status != null) {
                             Text(status!!, modifier = Modifier.padding(innerPadding));
                         } else {*/
 
-                        Text("Connection Status: $status", modifier = Modifier.padding(innerPadding))
-                        Text("Calibration Status: $calibrationStatus", modifier = Modifier.padding(innerPadding))
-                        Row(
+                        item {Text("Connection Status: $status", modifier = Modifier.padding(innerPadding))}
+                        item {Text("Calibration Status: $calibrationStatus", modifier = Modifier.padding(innerPadding))}
+                        item {Row(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Button(onClick = {
                                 confirmClearState.value = true
                             }) { Text("Clear Data") }
                             Button(onClick = { shareData() }) { Text("Share Data") }
-                        }
+                        }}
 
                         if (confirmClear) {
-                            AlertDialog(
+                            item{AlertDialog(
                                 onDismissRequest = { confirmClearState.value = false },
                                 confirmButton = {
                                     Button(onClick = {
@@ -797,10 +1080,17 @@ class MainActivity : ComponentActivity() {
                                     }) { Text("Cancel") }
                                 },
                                 title = { Text("Clear Data") },
-                                text = { Text("Clear Data?") })
+                                text = { Text("Clear Data?") })}
                         }
 
-                        Row(
+                        if(!notice.isEmpty()) {
+                            item{Dialog(
+                                onDismissRequest = { notice = "" }) {
+                                Text(notice)
+                            }}
+                        }
+
+                        item{Row(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text("Record")
@@ -810,18 +1100,58 @@ class MainActivity : ComponentActivity() {
                                     recording = it
                                     if (recording) {
                                         storage.start()
-                                        promptJob = scope.launch {
-                                            calibration(promptState)
-                                        }
                                     } else {
                                         storage.stop()
-                                        promptJob?.let { it.cancel() }
                                     }
                                 }
                             )
+                            Text(String.format("%d:%02d:%02d", recordSeconds.inWholeHours, recordSeconds.inWholeMinutes % 60, recordSeconds.inWholeSeconds % 60))
+                            Button(onClick = {
+                                val seconds = preferences.getInt("record-seconds", 0)
+                                preferences.edit(commit = true) {
+                                    putInt("record-seconds", 0)
+                                }
+                                recordSeconds = 0.seconds
+                            }) {Text("Clear")}
+                        }}
+
+                        item {
+                            Column() {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(modifier = Modifier.weight(1f)) {Text("SNR:")}
+                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Button(onClick = {
+                                        if (!(promptJob?.isActive ?: false)) {
+                                            promptJob = scope.launch {
+                                                calibration(promptState)
+                                            }
+                                        } else {
+                                            promptJob?.let { it.cancel() }
+                                        }
+                                    }) { Text(if (!(promptJob?.isActive ?: false)) {"Measure"} else { "Cancel" } ) }}
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Text("Model:")}
+                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Button(onClick = {
+                                        if (!(modelJob?.isActive ?: false)) {
+                                            modelJob = scope.launch {
+                                                testModel(promptState)
+                                            }
+                                        } else {
+                                            modelJob?.let { it.cancel() }
+                                        }
+                                    }) { Text(if (!(modelJob?.isActive ?: false)) {"Test"} else { "Cancel" } ) }}
+                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Button(onClick = {
+                                        importModel()
+                                    }) { Text("Import") }}
+                                }
+                            }
                         }
 
-                        Box {
+                        item{Box {
                             Button(onClick = { expanded = !expanded }) {
                                 Text(selectPlot)
                             }
@@ -836,27 +1166,6 @@ class MainActivity : ComponentActivity() {
                                         selectPlot = "Wave"
                                     }
                                 )
-                                /*DropdownMenuItem(
-                                    text = { Text("Band Pass") },
-                                    onClick = {
-                                        expanded = false
-                                        selectPlot = "Band Pass"
-                                    }
-                                )*/
-                                /*DropdownMenuItem(
-                                    text = { Text("Rectified") },
-                                    onClick = {
-                                        expanded = false
-                                        selectPlot = "Rectified"
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Low Pass") },
-                                    onClick = {
-                                        expanded = false
-                                        selectPlot = "Low Pass"
-                                    }
-                                )*/
                                 DropdownMenuItem(
                                     text = { Text("ICM") },
                                     onClick = {
@@ -879,14 +1188,14 @@ class MainActivity : ComponentActivity() {
                                     }
                                 )
                             }
-                        }
+                        }}
 
                         //if(prompt != null) {
-                            prompt?.let {Image(
+                        stickyHeader{prompt?.let {Image(
                                 painter = rememberAsyncImagePainter(it)
                                 , "",
                                 contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize())}
+                                modifier = Modifier.fillMaxSize().background(Color.Black))}}
                         if(snr.isNotEmpty()) {
                             /*for (i in 0..<snr[0].size) {
                                 Row() {
@@ -895,19 +1204,35 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }*/
-                            Row() {
-                                snr.forEach {
-                                    Column() {
-                                        it.forEach {
-                                            Text(String.format("%.2f", it) + " ")
+                            item{Column {
+                                for(i in 0..<snr[0].size) {
+                                    Row {
+                                        for(j in 0..<snr.size) {
+                                            Box(modifier = Modifier.fillMaxWidth().weight(1f).border(BorderStroke(1.dp, Color.White))) {
+                                                Text(" " + snr[j][i])
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            Button(onClick = {snr = listOf<List<Double>>()}) { Text("Clear SNR")}
+                            }}
+                            /*LazyVerticalGrid(columns=GridCells.Fixed(snr.size)) {
+                                items(snr.map {it.size}.sum()) { it ->
+                                    Text(" " + snr[it % snr.size][it/snr.size], modifier = Modifier.border(BorderStroke(1.dp, Color.White)))
+                                }
+                                //snr.forEach {
+                                    //Column() {
+                                    //    it.forEach {
+                                    //        Box(modifier = Modifier.border(BorderStroke(2.dp, Color.White))) {
+                                //                Text(String.format("%.2f", it))
+                                //            }
+                                     //   }
+                                    //}
+                                //}
+                            }*/
+                            item{Button(onClick = {snr = listOf<List<String>>()}) { Text("Clear SNR")}}
                         }
                         //} else {
-                            if(selectPlot == "Wave") {
+                        item{if(selectPlot == "Wave") {
                                 Graph(modifier = Modifier.fillMaxSize(), node)
                             //} else if(selectPlot == "Band Pass") {
                             //    Graph(modifier = Modifier.fillMaxSize(), intanBandPassNode)
@@ -921,7 +1246,7 @@ class MainActivity : ComponentActivity() {
                                 Graph(modifier = Modifier.fillMaxSize(), intanNode)
                             } else if(selectPlot == "ADC") {
                                 Graph(modifier = Modifier.fillMaxSize(), adcNode)
-                            }
+                            }}
                         //}
 
 
@@ -986,8 +1311,7 @@ fun <T> Graph(modifier: Modifier = Modifier, node: T) where T : Node, T: TimeSer
 
     }
 
-
-    Canvas(modifier=modifier.clipToBounds()) {
+    Canvas(modifier=modifier.height((LocalConfiguration.current.screenHeightDp).dp)) {
         invalidate.apply {}
         val count = signals.size
         val pixelSlice = size.height/count
