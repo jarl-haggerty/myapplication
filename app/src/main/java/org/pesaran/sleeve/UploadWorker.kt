@@ -25,7 +25,7 @@ import javax.net.ssl.X509TrustManager
 class UploadWorker(val appContext: Context, workerParams: WorkerParameters) : Worker(appContext, workerParams) {
 
     override fun doWork(): Result {
-        /*val host = "https://20.55.36.17"
+        val host = "https://20.55.36.17"
 
         val certStream = appContext.getResources().openRawResource(R.raw.sleeve_d50fb63dd19340d2b20aaebeeaf168d4)
         val cf = CertificateFactory.getInstance("X.509")
@@ -81,7 +81,7 @@ class UploadWorker(val appContext: Context, workerParams: WorkerParameters) : Wo
                 println("uplaaded $it ${it.length()}")
                 println("response $response")
             }
-        }*/
+        }
 
         return Result.success()
     }
