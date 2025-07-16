@@ -1,0 +1,5 @@
+flask
+requests
+waitress
+azure-identity
+azure-storage-blob

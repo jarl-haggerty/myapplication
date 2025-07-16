@@ -57,6 +57,7 @@ class SignalPlot(val name: String) {
         val scaleX = bounds.width / 10e9
         val scaleY = bounds.height/(top - bottom)
         scope.apply {
+            drawRect(Color.White, bounds.topLeft, bounds.size, style=Stroke())
             translate (bounds.left, bounds.top + bounds.height*.95f) {
                 scale(scaleX.toFloat(), -scaleY.toFloat()*.9f, Offset(0F, 0F)) {
                     translate(10.0E9F - time, -bottom.toFloat()) {

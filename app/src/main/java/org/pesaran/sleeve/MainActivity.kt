@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -45,15 +46,18 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,7 +68,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview
@@ -113,7 +120,13 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.edit
 import kotlinx.serialization.*
 import kotlinx.serialization.json.Json
+import org.pesaran.thalamus.ThalamusOuterClass
+import java.net.DatagramPacket
+import java.net.InetAddress
+import java.net.MulticastSocket
 import java.nio.charset.StandardCharsets
+import kotlin.concurrent.thread
+import java.io.ByteArrayInputStream
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -127,6 +140,7 @@ enum class Sensor(i: Int) {
 
 class MainActivity : ComponentActivity() {
     val node = WaveNode()
+    val clockNode = ClockNode()
     val intanNode = IntanRHDNode()
     //val intanBandPassNode = node
     val fft = FastFourierTransformer(DftNormalization.STANDARD)
@@ -200,6 +214,8 @@ class MainActivity : ComponentActivity() {
         return bluetoothEnableChannel.receive()
     }
 
+    val connectionProgress = mutableDoubleStateOf(0.0)
+
     suspend fun loop() {
         val permissionsStatus = checkPermissions()
         if (!permissionsStatus.success) {
@@ -220,7 +236,19 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        val numSteps = 13.0
+        var currentStep = 0.0
+        val updateProgress = {
+            ++currentStep
+            connectionProgress.doubleValue = currentStep/numSteps
+        }
+        val resetProgress = {
+            currentStep = 0.0
+            connectionProgress.doubleValue = currentStep/numSteps
+        }
+
         while(true) {
+            resetProgress()
             val scanChannel = Channel<BluetoothDevice>()
             val bluetoothManager = getSystemService(BluetoothManager::class.java)
             val bluetoothAdapter = bluetoothManager.adapter!!
@@ -249,6 +277,7 @@ class MainActivity : ComponentActivity() {
                 bluetoothAdapter.bluetoothLeScanner.startScan(scanCallback)
                 device = scanChannel.receive()
             //}
+            updateProgress()
 
             data class TimeSize(val time: Long, val count: Long)
             var lastTime = System.currentTimeMillis()
@@ -356,7 +385,9 @@ class MainActivity : ComponentActivity() {
             while(connectionState != BluetoothProfile.STATE_CONNECTED) {
                 connectionState = connectionChannel.receive()
             }
+            updateProgress()
 
+            status.value = "Discovering services"
             gatt.requestMtu(247)
             gatt.discoverServices()
             var servicesStatus = serviceChannel.receive()
@@ -364,6 +395,7 @@ class MainActivity : ComponentActivity() {
                 error.value = servicesStatus.message
                 return
             }
+            updateProgress()
 
             val uartService = gatt.getService(UART_SERVICE_UUID)
             println("uartService $uartService")
@@ -374,10 +406,12 @@ class MainActivity : ComponentActivity() {
 
             val spacing = 800.milliseconds
             gatt.setCharacteristicNotification(txCharacteristic, true)
+            status.value = "Enabling notifications"
             txCharacteristic.descriptors.forEach {
                 gatt.writeDescriptor(it,  BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                 wroteDescriptorChannel.receive()
             }
+            updateProgress()
             //delay(spacing)
 
             val write: (suspend (Block) -> Status) = {
@@ -393,68 +427,86 @@ class MainActivity : ComponentActivity() {
             //gatt.writeCharacteristic(txCharacteristic!!, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
             delay(spacing)
             println(1)
+            status.value = "Setting ICM channel mask"
             var writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(2, 0, 0, 0, 63))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(2)
             //delay(1.seconds)
+            status.value = "Setting INTAN channel mask"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(4, 0, 0, -1, -1))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(3)
             //delay(1.seconds)
+            status.value = "Setting ADC channel mask"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_CHANNEL_MASK, ByteBuffer.wrap(byteArrayOf(5, 0, 0, 0, 1))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(4)
             //delay(1.seconds)
 
+            status.value = "Setting ICM sample rate"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(2, 0))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(5)
             //delay(1.seconds)
+            status.value = "Setting INTAN sample rate"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(4, 19))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(6)
             //delay(1.seconds)
+            status.value = "Setting ADC sample rate"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_SET_SAMPLE_RATE, ByteBuffer.wrap(byteArrayOf(5, 0))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(7)
             //delay(1.seconds)
 
+            status.value = "Enabling ICM"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(2, 1))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(1)
             //delay(1.seconds)
+            status.value = "Enabling INTAN"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(4, 1))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println(1)
             //delay(1.seconds)
+            status.value = "Enabling ADC"
             writeStatus = write(Block(BlockType.CMD_BLOCK, ID_ENABLE, ByteBuffer.wrap(byteArrayOf(5, 1))))
             if(!writeStatus.success) {
                 continue;
             }
+            updateProgress()
             delay(spacing)
             println("Pause")
             //gatt.readCharacteristic(txCharacteristic)
@@ -961,11 +1013,34 @@ class MainActivity : ComponentActivity() {
     }
 
     val notice = mutableStateOf("")
+    var multicastThread: Thread? = null
 
     @OptIn(ExperimentalMaterial3Api::class)
     @SuppressLint("ApplySharedPref")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val storage = Storage(this)
+
+        multicastThread = thread {
+            val socket = MulticastSocket(50091)
+            val group = InetAddress.getByName("224.0.0.91")
+            socket.joinGroup(group)
+            val buffer = ByteArray(256)
+            val packet = DatagramPacket(buffer, buffer.size)
+            while(!isFinishing) {
+                socket.receive(packet)
+                val message = ThalamusOuterClass.StorageRecord.parseFrom(ByteArrayInputStream(packet.data, 0, packet.length))
+                val now = System.nanoTime()
+                val remoteTime = message.time
+                val recordBuilder = message.toBuilder()
+                recordBuilder.setTime(now).analogBuilder.setTime(now).setRemoteTime(remoteTime)
+                val newMessage = recordBuilder.build()
+                println(newMessage)
+                storage.log(message)
+            }
+            socket.leaveGroup(group)
+            socket.close()
+        }
 
         /*SingletonImageLoader.setSafe { context ->
             ImageLoader.Builder(context)
@@ -988,6 +1063,12 @@ class MainActivity : ComponentActivity() {
         }
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
 
+        var uuid = preferences.getString("uuid", "")
+        if (uuid == null || uuid.isEmpty()) {
+            uuid = UUID.randomUUID().toString()
+            preferences.edit(commit = true) { putString("uuid", uuid) }
+        }
+
         val modelText = preferences.getString("model", "")!!
         if(!modelText.isEmpty()) {
             model = Json.decodeFromString(MyModel.serializer(), modelText)
@@ -997,14 +1078,15 @@ class MainActivity : ComponentActivity() {
         var recording = mutableStateOf(false)
         var confirmClearState = mutableStateOf(false)
         val promptState = mutableStateOf<Int?>(null)
-        val storage = Storage(this)
         val recordSeconds = mutableStateOf(preferences.getInt("record-seconds", 0).seconds)
         //storage.add("Wave", node)
+        storage.add("Clock", clockNode)
         storage.add("Intan", intanNode)
         storage.add("ICM", icmNode)
         storage.add("ADC", adcNode)
 
         node.start()
+        clockNode.start()
         val toggle = {
             node.toggle()
             //if(node.running) {
@@ -1032,6 +1114,7 @@ class MainActivity : ComponentActivity() {
             var count by remember { value }
             var error by remember { error }
             var status by remember { status }
+            var connectionProgress by remember {connectionProgress}
             var calibrationStatus by remember { calibrationStatus }
             var recording by remember { recording }
             var confirmClear by remember { confirmClearState }
@@ -1043,6 +1126,8 @@ class MainActivity : ComponentActivity() {
             var snr by remember { snr }
             var recordSeconds by remember { recordSeconds }
             var notice by remember {notice}
+            //var scope = rememberCoroutineScope()
+            var clipboard = LocalClipboard.current
 
             /*val imageLoader = ImageLoader.Builder(applicationContext)
                 .components {
@@ -1063,7 +1148,23 @@ class MainActivity : ComponentActivity() {
                             Text(status!!, modifier = Modifier.padding(innerPadding));
                         } else {*/
 
+                        item {Text("UUID: $uuid", modifier = Modifier.padding(innerPadding))}
+                        item {
+                            Button(onClick = {
+                            scope.launch {
+                                clipboard.setClipEntry(ClipData.newPlainText(uuid,uuid).toClipEntry())
+                            }
+                        }) {
+                            Text("Copy UUID")
+                        }}
+
                         item {Text("Connection Status: $status", modifier = Modifier.padding(innerPadding))}
+                        item {
+                            LinearProgressIndicator(
+                                progress = { connectionProgress.toFloat() },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                         item {Text("Calibration Status: $calibrationStatus", modifier = Modifier.padding(innerPadding))}
                         item {Row(
                             verticalAlignment = Alignment.CenterVertically,

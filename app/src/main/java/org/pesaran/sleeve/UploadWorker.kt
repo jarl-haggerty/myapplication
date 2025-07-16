@@ -63,22 +63,29 @@ class UploadWorker(val appContext: Context, workerParams: WorkerParameters) : Wo
                 }
             }
             val now = System.currentTimeMillis()
-            recordingDir.listFiles().filter { now - it.lastModified() > 10e3 }.filter {
+
+            val allFiles = recordingDir.listFiles()!!
+            println("Found ${allFiles.contentToString()}")
+            val newFiles = allFiles.filter { now - it.lastModified() > 10e3 }.filter {
                 val response = client.get("$host/exists?uuid=$uuid&path=${it.name}")
                 val text: String = response.body()
                 val cleaned = text.trim().lowercase()
                 cleaned != "true"
-            }.forEach {
+            }
+            println("Uploading $newFiles")
+            newFiles.forEach {
+                val stream = it.inputStream().asInput()
                 val response = client.submitFormWithBinaryData(
                     url = "$host/upload?uuid=$uuid&path=${it.name}",
                     formData = formData {
-                        append(it.name, it.inputStream().asInput(), Headers.build {
+                        append(it.name, stream, Headers.build {
                             append(HttpHeaders.ContentType, "application/octet-stream")
                             append(HttpHeaders.ContentDisposition, "filename=\"${it.name}\"")
                         })
                     }
                 )
-                println("uplaaded $it ${it.length()}")
+                stream.close()
+                println("uploaded $it ${it.length()}")
                 println("response $response")
             }
         }

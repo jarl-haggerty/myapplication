@@ -97,6 +97,13 @@ class Storage(val context: Context) {
         record.writeTo(outputStream)
     }
 
+    fun log(record: StorageRecord) {
+        if(!running) {
+            return
+        }
+        writeRecord(record)
+    }
+
     private fun readRecord(stream: InputStream): StorageRecord? {
         if(stream.available() < 8) {
             return null
