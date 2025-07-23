@@ -1,7 +1,9 @@
 package org.pesaran.sleeve
 
+import android.os.StrictMode
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -16,7 +18,6 @@ import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build.VERSION.SDK_INT
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -35,13 +36,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -57,22 +53,17 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.toClipEntry
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
@@ -103,10 +94,7 @@ import kotlin.time.Duration.Companion.seconds
 //import coil3.GifDecoder
 import coil3.compose.rememberAsyncImagePainter
 import org.apache.commons.math3.util.FastMath.pow
-import java.lang.Math.pow
 import kotlin.math.log10
-import kotlin.math.log2
-import kotlin.math.pow
 import kotlin.math.sqrt
 import kotlin.time.Duration
 import org.apache.commons.math3.transform.DftNormalization
@@ -114,7 +102,6 @@ import org.apache.commons.math3.transform.FastFourierTransformer
 import org.apache.commons.math3.transform.TransformType
 import org.apache.commons.math3.complex.Complex
 import kotlin.math.abs
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.edit
@@ -127,6 +114,15 @@ import java.net.MulticastSocket
 import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
 import java.io.ByteArrayInputStream
+import android.app.NotificationChannel
+import android.os.Build
+import android.widget.CheckBox
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Slider
+import androidx.compose.material3.TriStateCheckbox
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.state.ToggleableState
 
 val UART_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 val UART_RX_CHAR_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -172,7 +168,8 @@ class MainActivity : ComponentActivity() {
             if(it.getOrDefault(android.Manifest.permission.BLUETOOTH_SCAN, false)
                 && it.getOrDefault(android.Manifest.permission.BLUETOOTH_CONNECT, false)
                 && it.getOrDefault(android.Manifest.permission.ACCESS_FINE_LOCATION, false)
-                && it.getOrDefault(android.Manifest.permission.ACCESS_COARSE_LOCATION, false)) {
+                && it.getOrDefault(android.Manifest.permission.ACCESS_COARSE_LOCATION, false)
+                && it.getOrDefault(android.Manifest.permission.POST_NOTIFICATIONS, false)) {
                 permissionChannel.send(Status(true, ""))
             } else {
                 permissionChannel.send(Status(false, "Bluetooth permissions denied"))
@@ -187,7 +184,8 @@ class MainActivity : ComponentActivity() {
             android.Manifest.permission.BLUETOOTH_CONNECT,
             android.Manifest.permission.BLUETOOTH_SCAN,
             android.Manifest.permission.ACCESS_FINE_LOCATION,
-            android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.POST_NOTIFICATIONS)
         val unpermitted = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_DENIED
         }
@@ -1014,12 +1012,38 @@ class MainActivity : ComponentActivity() {
 
     val notice = mutableStateOf("")
     var multicastThread: Thread? = null
+    val showSurvey = mutableStateOf(false)
+
+    fun pollShowSurvey() {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        this.showSurvey.value = preferences.getBoolean("show-survey", false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pollShowSurvey()
+    }
 
     @OptIn(ExperimentalMaterial3Api::class)
     @SuppressLint("ApplySharedPref")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        StrictMode.setVmPolicy(
+            StrictMode.VmPolicy.Builder(StrictMode.getVmPolicy()).detectLeakedClosableObjects().build()
+        )
+
         val storage = Storage(this)
+        storage.start()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Create the NotificationChannel.
+            val mChannel = NotificationChannel("SLEEVE", "Sleeve", NotificationManager.IMPORTANCE_MAX)
+            mChannel.description = "Sleeve Survery"
+            // Register the channel with the system. You can't change the importance
+            // or other notification behaviors after this.
+            val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(mChannel)
+        }
 
         multicastThread = thread {
             val socket = MulticastSocket(50091)
@@ -1036,7 +1060,7 @@ class MainActivity : ComponentActivity() {
                 recordBuilder.setTime(now).analogBuilder.setTime(now).setRemoteTime(remoteTime)
                 val newMessage = recordBuilder.build()
                 println(newMessage)
-                storage.log(message)
+                storage.log(newMessage)
             }
             socket.leaveGroup(group)
             socket.close()
@@ -1054,9 +1078,14 @@ class MainActivity : ComponentActivity() {
             .setConstraints(constraints)
             .build()
 
+        val surveyRequest = PeriodicWorkRequestBuilder<SurveyWorker>(15, TimeUnit.MINUTES)
+            .build()
+
         val workInfo = WorkManager.getInstance(this).getWorkInfosForUniqueWork("sleeve-data-upload")
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("sleeve-data-upload",
             ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE, workRequest)
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork("sleeve-survey",
+            ExistingPeriodicWorkPolicy.UPDATE, surveyRequest)
 
         scope.launch {
             loop()
@@ -1106,6 +1135,7 @@ class MainActivity : ComponentActivity() {
                     }
                     recordSeconds.value = (seconds+1).seconds
                 }
+                pollShowSurvey();
             }
         }
 
@@ -1128,6 +1158,7 @@ class MainActivity : ComponentActivity() {
             var notice by remember {notice}
             //var scope = rememberCoroutineScope()
             var clipboard = LocalClipboard.current
+            var showSurvey by remember { showSurvey }
 
             /*val imageLoader = ImageLoader.Builder(applicationContext)
                 .components {
@@ -1141,227 +1172,328 @@ class MainActivity : ComponentActivity() {
 
             SleeveTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        if(error != null) {
-                            item{Text(error!!, modifier = Modifier.padding(innerPadding), color=Color.Red)}
-                        } /*else if (status != null) {
-                            Text(status!!, modifier = Modifier.padding(innerPadding));
-                        } else {*/
-
-                        item {Text("UUID: $uuid", modifier = Modifier.padding(innerPadding))}
-                        item {
-                            Button(onClick = {
-                            scope.launch {
-                                clipboard.setClipEntry(ClipData.newPlainText(uuid,uuid).toClipEntry())
-                            }
-                        }) {
-                            Text("Copy UUID")
-                        }}
-
-                        item {Text("Connection Status: $status", modifier = Modifier.padding(innerPadding))}
-                        item {
-                            LinearProgressIndicator(
-                                progress = { connectionProgress.toFloat() },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+                    if(showSurvey) {
+                        Survey(innerPadding, storage) {
+                            val preferences =
+                                PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                            preferences.edit(commit = true) { putBoolean("show-survey", false) }
                         }
-                        item {Text("Calibration Status: $calibrationStatus", modifier = Modifier.padding(innerPadding))}
-                        item {Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Button(onClick = {
-                                confirmClearState.value = true
-                            }) { Text("Clear Data") }
-                            Button(onClick = { shareData() }) { Text("Share Data") }
-                        }}
+                    } else {
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            if (error != null) {
+                                item {
+                                    Text(
+                                        error!!,
+                                        modifier = Modifier.padding(innerPadding),
+                                        color = Color.Red
+                                    )
+                                }
+                            } /*else if (status != null) {
+                                Text(status!!, modifier = Modifier.padding(innerPadding));
+                            } else {*/
 
-                        if (confirmClear) {
-                            item{AlertDialog(
-                                onDismissRequest = { confirmClearState.value = false },
-                                confirmButton = {
-                                    Button(onClick = {
-                                        clearData()
-                                        confirmClearState.value = false
-                                    }) { Text("Confirm") }
-                                },
-                                dismissButton = {
-                                    Button(onClick = {
-                                        confirmClearState.value = false
-                                    }) { Text("Cancel") }
-                                },
-                                title = { Text("Clear Data") },
-                                text = { Text("Clear Data?") })}
-                        }
-
-                        if(!notice.isEmpty()) {
-                            item{Dialog(
-                                onDismissRequest = { notice = "" }) {
-                                Text(notice)
-                            }}
-                        }
-
-                        item{Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Record")
-                            Checkbox(
-                                checked = recording,
-                                onCheckedChange = {
-                                    recording = it
-                                    if (recording) {
-                                        storage.start()
-                                    } else {
-                                        storage.stop()
+                            item { Text("UUID: $uuid", modifier = Modifier.padding(innerPadding)) }
+                            item {
+                                Button(onClick = {
+                                    scope.launch {
+                                        clipboard.setClipEntry(
+                                            ClipData.newPlainText(uuid, uuid).toClipEntry()
+                                        )
                                     }
+                                }) {
+                                    Text("Copy UUID")
                                 }
-                            )
-                            Text(String.format("%d:%02d:%02d", recordSeconds.inWholeHours, recordSeconds.inWholeMinutes % 60, recordSeconds.inWholeSeconds % 60))
-                            Button(onClick = {
-                                val seconds = preferences.getInt("record-seconds", 0)
-                                preferences.edit(commit = true) {
-                                    putInt("record-seconds", 0)
-                                }
-                                recordSeconds = 0.seconds
-                            }) {Text("Clear")}
-                        }}
+                            }
 
-                        item {
-                            Column() {
+                            item {
+                                Button(onClick = {
+                                    val preferences =
+                                        PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                                    preferences.edit(commit = true) { putBoolean("show-survey", true) }
+                                }) {
+                                    Text("Do Survey")
+                                }
+                            }
+
+                            item {
+                                Text(
+                                    "Connection Status: $status",
+                                    modifier = Modifier.padding(innerPadding)
+                                )
+                            }
+                            item {
+                                LinearProgressIndicator(
+                                    progress = { connectionProgress.toFloat() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            item {
+                                Text(
+                                    "Calibration Status: $calibrationStatus",
+                                    modifier = Modifier.padding(innerPadding)
+                                )
+                            }
+                            item {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Box(modifier = Modifier.weight(1f)) {Text("SNR:")}
-                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Button(onClick = {
-                                        if (!(promptJob?.isActive ?: false)) {
-                                            promptJob = scope.launch {
-                                                calibration(promptState)
-                                            }
-                                        } else {
-                                            promptJob?.let { it.cancel() }
-                                        }
-                                    }) { Text(if (!(promptJob?.isActive ?: false)) {"Measure"} else { "Cancel" } ) }}
+                                    Button(onClick = {
+                                        confirmClearState.value = true
+                                    }) { Text("Clear Data") }
+                                    Button(onClick = { shareData() }) { Text("Share Data") }
                                 }
+                            }
+
+                            if (confirmClear) {
+                                item {
+                                    AlertDialog(
+                                        onDismissRequest = { confirmClearState.value = false },
+                                        confirmButton = {
+                                            Button(onClick = {
+                                                clearData()
+                                                confirmClearState.value = false
+                                            }) { Text("Confirm") }
+                                        },
+                                        dismissButton = {
+                                            Button(onClick = {
+                                                confirmClearState.value = false
+                                            }) { Text("Cancel") }
+                                        },
+                                        title = { Text("Clear Data") },
+                                        text = { Text("Clear Data?") })
+                                }
+                            }
+
+                            if (!notice.isEmpty()) {
+                                item {
+                                    Dialog(
+                                        onDismissRequest = { notice = "" }) {
+                                        Text(notice)
+                                    }
+                                }
+                            }
+
+                            item {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Text("Model:")}
-                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Button(onClick = {
-                                        if (!(modelJob?.isActive ?: false)) {
-                                            modelJob = scope.launch {
-                                                testModel(promptState)
-                                            }
-                                        } else {
-                                            modelJob?.let { it.cancel() }
+                                    Text("Record")
+                                    Checkbox(
+                                        checked = recording,
+                                        onCheckedChange = {
+                                            recording = it
+                                            storage.recording = it
                                         }
-                                    }) { Text(if (!(modelJob?.isActive ?: false)) {"Test"} else { "Cancel" } ) }}
-                                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {Button(onClick = {
-                                        importModel()
-                                    }) { Text("Import") }}
+                                    )
+                                    Text(
+                                        String.format(
+                                            "%d:%02d:%02d",
+                                            recordSeconds.inWholeHours,
+                                            recordSeconds.inWholeMinutes % 60,
+                                            recordSeconds.inWholeSeconds % 60
+                                        )
+                                    )
+                                    Button(onClick = {
+                                        val seconds = preferences.getInt("record-seconds", 0)
+                                        preferences.edit(commit = true) {
+                                            putInt("record-seconds", 0)
+                                        }
+                                        recordSeconds = 0.seconds
+                                    }) { Text("Clear") }
                                 }
                             }
-                        }
 
-                        item{Box {
-                            Button(onClick = { expanded = !expanded }) {
-                                Text(selectPlot)
-                            }
-                            DropdownMenu(
-                                expanded = expanded,
-                                onDismissRequest = { expanded = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Wave") },
-                                    onClick = {
-                                        expanded = false
-                                        selectPlot = "Wave"
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("ICM") },
-                                    onClick = {
-                                        expanded = false
-                                        selectPlot = "ICM"
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Intan") },
-                                    onClick = {
-                                        expanded = false
-                                        selectPlot = "Intan"
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("ADC") },
-                                    onClick = {
-                                        expanded = false
-                                        selectPlot = "ADC"
-                                    }
-                                )
-                            }
-                        }}
-
-                        //if(prompt != null) {
-                        stickyHeader{prompt?.let {Image(
-                                painter = rememberAsyncImagePainter(it)
-                                , "",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize().background(Color.Black))}}
-                        if(snr.isNotEmpty()) {
-                            /*for (i in 0..<snr[0].size) {
-                                Row() {
-                                    snr.forEach {
-                                        Text(String.format("%.2f", it[i]) + " ")
-                                    }
-                                }
-                            }*/
-                            item{Column {
-                                for(i in 0..<snr[0].size) {
-                                    Row {
-                                        for(j in 0..<snr.size) {
-                                            Box(modifier = Modifier.fillMaxWidth().weight(1f).border(BorderStroke(1.dp, Color.White))) {
-                                                Text(" " + snr[j][i])
+                            item {
+                                Column() {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(modifier = Modifier.weight(1f)) { Text("SNR:") }
+                                        Box(modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)) {
+                                            Button(onClick = {
+                                                if (!(promptJob?.isActive ?: false)) {
+                                                    promptJob = scope.launch {
+                                                        calibration(promptState)
+                                                    }
+                                                } else {
+                                                    promptJob?.let { it.cancel() }
+                                                }
+                                            }) {
+                                                Text(
+                                                    if (!(promptJob?.isActive ?: false)) {
+                                                        "Measure"
+                                                    } else {
+                                                        "Cancel"
+                                                    }
+                                                )
                                             }
                                         }
                                     }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .weight(1f)
+                                        ) { Text("Model:") }
+                                        Box(modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)) {
+                                            Button(onClick = {
+                                                if (!(modelJob?.isActive ?: false)) {
+                                                    modelJob = scope.launch {
+                                                        testModel(promptState)
+                                                    }
+                                                } else {
+                                                    modelJob?.let { it.cancel() }
+                                                }
+                                            }) {
+                                                Text(
+                                                    if (!(modelJob?.isActive ?: false)) {
+                                                        "Test"
+                                                    } else {
+                                                        "Cancel"
+                                                    }
+                                                )
+                                            }
+                                        }
+                                        Box(modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)) {
+                                            Button(onClick = {
+                                                importModel()
+                                            }) { Text("Import") }
+                                        }
+                                    }
                                 }
-                            }}
-                            /*LazyVerticalGrid(columns=GridCells.Fixed(snr.size)) {
-                                items(snr.map {it.size}.sum()) { it ->
-                                    Text(" " + snr[it % snr.size][it/snr.size], modifier = Modifier.border(BorderStroke(1.dp, Color.White)))
+                            }
+
+                            item {
+                                Box {
+                                    Button(onClick = { expanded = !expanded }) {
+                                        Text(selectPlot)
+                                    }
+                                    DropdownMenu(
+                                        expanded = expanded,
+                                        onDismissRequest = { expanded = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Wave") },
+                                            onClick = {
+                                                expanded = false
+                                                selectPlot = "Wave"
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("ICM") },
+                                            onClick = {
+                                                expanded = false
+                                                selectPlot = "ICM"
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Intan") },
+                                            onClick = {
+                                                expanded = false
+                                                selectPlot = "Intan"
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("ADC") },
+                                            onClick = {
+                                                expanded = false
+                                                selectPlot = "ADC"
+                                            }
+                                        )
+                                    }
                                 }
-                                //snr.forEach {
-                                    //Column() {
-                                    //    it.forEach {
-                                    //        Box(modifier = Modifier.border(BorderStroke(2.dp, Color.White))) {
-                                //                Text(String.format("%.2f", it))
-                                //            }
-                                     //   }
+                            }
+
+                            //if(prompt != null) {
+                            stickyHeader {
+                                prompt?.let {
+                                    Image(
+                                        painter = rememberAsyncImagePainter(it), "",
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black)
+                                    )
+                                }
+                            }
+                            if (snr.isNotEmpty()) {
+                                /*for (i in 0..<snr[0].size) {
+                                    Row() {
+                                        snr.forEach {
+                                            Text(String.format("%.2f", it[i]) + " ")
+                                        }
+                                    }
+                                }*/
+                                item {
+                                    Column {
+                                        for (i in 0..<snr[0].size) {
+                                            Row {
+                                                for (j in 0..<snr.size) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .weight(1f)
+                                                            .border(BorderStroke(1.dp, Color.White))
+                                                    ) {
+                                                        Text(" " + snr[j][i])
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                /*LazyVerticalGrid(columns=GridCells.Fixed(snr.size)) {
+                                    items(snr.map {it.size}.sum()) { it ->
+                                        Text(" " + snr[it % snr.size][it/snr.size], modifier = Modifier.border(BorderStroke(1.dp, Color.White)))
+                                    }
+                                    //snr.forEach {
+                                        //Column() {
+                                        //    it.forEach {
+                                        //        Box(modifier = Modifier.border(BorderStroke(2.dp, Color.White))) {
+                                    //                Text(String.format("%.2f", it))
+                                    //            }
+                                         //   }
+                                        //}
                                     //}
-                                //}
-                            }*/
-                            item{Button(onClick = {snr = listOf<List<String>>()}) { Text("Clear SNR")}}
+                                }*/
+                                item {
+                                    Button(onClick = {
+                                        snr = listOf<List<String>>()
+                                    }) { Text("Clear SNR") }
+                                }
+                            }
+                            //} else {
+                            item {
+                                if (selectPlot == "Wave") {
+                                    Graph(modifier = Modifier.fillMaxSize(), node)
+                                    //} else if(selectPlot == "Band Pass") {
+                                    //    Graph(modifier = Modifier.fillMaxSize(), intanBandPassNode)
+                                    //} else if(selectPlot == "Rectified") {
+                                    //    Graph(modifier = Modifier.fillMaxSize(), rectifierNode)
+                                    //} else if(selectPlot == "Low Pass") {
+                                    //   Graph(modifier = Modifier.fillMaxSize(), lowPassNode)
+                                } else if (selectPlot == "ICM") {
+                                    Graph(modifier = Modifier.fillMaxSize(), icmNode)
+                                } else if (selectPlot == "Intan") {
+                                    Graph(modifier = Modifier.fillMaxSize(), intanNode)
+                                } else if (selectPlot == "ADC") {
+                                    Graph(modifier = Modifier.fillMaxSize(), adcNode)
+                                }
+                            }
+                            //}
+
+
+                            //Button(onClick = {toggle()}) { Text(count.toString())};
+                            //}
                         }
-                        //} else {
-                        item{if(selectPlot == "Wave") {
-                                Graph(modifier = Modifier.fillMaxSize(), node)
-                            //} else if(selectPlot == "Band Pass") {
-                            //    Graph(modifier = Modifier.fillMaxSize(), intanBandPassNode)
-                            //} else if(selectPlot == "Rectified") {
-                            //    Graph(modifier = Modifier.fillMaxSize(), rectifierNode)
-                            //} else if(selectPlot == "Low Pass") {
-                             //   Graph(modifier = Modifier.fillMaxSize(), lowPassNode)
-                            } else if(selectPlot == "ICM") {
-                                Graph(modifier = Modifier.fillMaxSize(), icmNode)
-                            } else if(selectPlot == "Intan") {
-                                Graph(modifier = Modifier.fillMaxSize(), intanNode)
-                            } else if(selectPlot == "ADC") {
-                                Graph(modifier = Modifier.fillMaxSize(), adcNode)
-                            }}
-                        //}
-
-
-                        //Button(onClick = {toggle()}) { Text(count.toString())};
-                        //}
                     }
                 }
             }
@@ -1378,6 +1510,141 @@ val COLORS = arrayOf(
     Color.Yellow,
     Color.Gray
 )
+
+@Composable
+fun SliderRow(question: String, state: Float?, setState: (Float) -> Unit, min: Float, max: Float) {
+    val range = max - min
+    Text("$question ${state?.toInt() ?: "No Answer"}")
+    Slider(
+        value = (state ?: 0f)/range + min,
+        onValueChange = { setState(range*it + min) }
+    )
+}
+
+@Composable
+fun CheckBoxRow(question: String, state: ToggleableState, setState: (ToggleableState) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(question)
+        TriStateCheckbox(
+            state = state,
+            onClick = {
+                setState(when (state) {
+                    ToggleableState.Indeterminate -> {
+                        ToggleableState.On
+                    }
+                    ToggleableState.On -> {
+                        ToggleableState.Off
+                    }
+                    ToggleableState.Off -> {
+                        ToggleableState.On
+                    }
+                })
+            }
+        )
+        Text(when (state) {
+            ToggleableState.Indeterminate -> {
+                "No answer"
+            }
+            ToggleableState.On -> {
+                "Yes"
+            }
+            ToggleableState.Off -> {
+                "No"
+            }
+        })
+    }
+}
+
+@Composable
+fun Survey(innerPadding: PaddingValues, storage: Storage, onSubmit: () -> Unit) {
+    var (distress, setDistress) = remember { mutableStateOf<Float?>(null) }
+    var (performingManualRitual, setPerformingManualRitual) = remember { mutableStateOf<ToggleableState>(ToggleableState.Indeterminate) }
+    var (performingMentalRitual, setPerformingMentalRitual) = remember { mutableStateOf<ToggleableState>(ToggleableState.Indeterminate) }
+    var (manualRitualMinutes, setManualRitualMinutes) = remember { mutableStateOf<Float?>(null) }
+    var (mentalRitualMinutes, setMentalRitualMinutes) = remember { mutableStateOf<Float?>(null) }
+
+    var (manualRitualUrge, setManualRitualUrge) = remember { mutableStateOf<Float?>(null) }
+    var (manualRitualResistance, setManualRitualResistance) = remember { mutableStateOf<Float?>(null) }
+
+    var (mentalRitualUrge, setMentalRitualUrge) = remember { mutableStateOf<Float?>(null) }
+    var (mentalRitualResistance, setMentalRitualResistance) = remember { mutableStateOf<Float?>(null) }
+
+    val toggleToNumber = { state: ToggleableState ->
+        when (state) {
+            ToggleableState.Indeterminate -> {
+                -1
+            }
+            ToggleableState.On -> {
+                1
+            }
+            ToggleableState.Off -> {
+                0
+            }
+        }
+    }
+
+    LazyColumn(modifier = Modifier
+        .fillMaxSize()
+        .padding(innerPadding)) {
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {SliderRow("Right now, what is your distress?", distress, setDistress, 0f, 100f)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {CheckBoxRow("Right now are you engaging\nin any manual compulsion/ritual?", performingManualRitual, setPerformingManualRitual)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {SliderRow("In the past hour, how many minutes have you spent doing any manual compulsion/ritual?", manualRitualMinutes, setManualRitualMinutes, 0f, 60f)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {SliderRow("Right now, what are your urges to engage in any manual compulsion/ritual?", manualRitualUrge, setManualRitualUrge, 0f, 100f)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {SliderRow("Right now, how much effort are you making to resist any manual compulsion/rituals?", manualRitualResistance, setManualRitualResistance, 0f, 100f)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {CheckBoxRow("Right now, are you engaging in any mental compulsion/ritual?", performingMentalRitual, setPerformingMentalRitual)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {SliderRow("In the past hour, how many minutes have you spent doing any mental compulsion/ritual?", mentalRitualMinutes, setMentalRitualMinutes, 0f, 60f)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {SliderRow("Right now, what are your urges to engage in any mental compulsion/ritual?", mentalRitualUrge, setMentalRitualUrge, 0f, 100f)}
+
+        item {HorizontalDivider(thickness = 2.dp)}
+        item {SliderRow("Right now, how much effort are you making to resist any mental compulsion/rituals?", mentalRitualResistance, setMentalRitualResistance, 0f, 100f)}
+
+        item {Button(onClick = {
+            val now = System.nanoTime()
+
+            val recordBuilder = ThalamusOuterClass.StorageRecord.newBuilder()
+            recordBuilder.setNode("Survey")
+            recordBuilder.setTime(now)
+            val analogBuilder = recordBuilder.analogBuilder
+            analogBuilder.setTime(now)
+            val data = listOf(
+                (distress?.toInt() ?: -1),
+                toggleToNumber(performingManualRitual),
+                (manualRitualMinutes?.toInt() ?: -1),
+                (manualRitualUrge?.toInt() ?: -1),
+                (manualRitualResistance?.toInt() ?: -1),
+                toggleToNumber(performingMentalRitual),
+                (mentalRitualMinutes?.toInt() ?: -1),
+                (mentalRitualUrge?.toInt() ?: -1),
+                (mentalRitualResistance?.toInt() ?: -1),
+            )
+            analogBuilder.addAllIntData(data)
+            analogBuilder.setIsIntData(true)
+
+            val newMessage = recordBuilder.build()
+            println(newMessage)
+            storage.log(newMessage)
+
+            onSubmit()
+        }) { Text("Submit") }}
+    }
+}
 
 @Composable
 fun <T> Graph(modifier: Modifier = Modifier, node: T) where T : Node, T: TimeSeriesNode {

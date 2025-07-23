@@ -25,7 +25,7 @@ class Storage(val context: Context) {
     var running = false
 
     private fun onTimeSeries(name: String, node: TimeSeriesNode) {
-        if(!node.hasAnalogData() || !running) {
+        if(!node.hasAnalogData() || !running || !recording) {
             return
         }
 
@@ -144,7 +144,7 @@ class Storage(val context: Context) {
         }
 
         val stream = file.inputStream()
-        val record = readRecord(file.inputStream())
+        val record = readRecord(stream)
         stream.close()
         //Does first record exist
         if(record == null) {
@@ -201,6 +201,8 @@ class Storage(val context: Context) {
             scope.launch { loop() }
         }
     }
+
+    var recording = false
 
     fun stop() {
         running = false
